@@ -1,0 +1,11 @@
+[package]
+name = "asteroids"
+version = "0.1.0"
+authors = ["Simon Voordouw <simonvoordouw@gmail.com>"]
+edition = "2021"
+
+[dependencies]
+bevy = { version="0.13", features=["wayland"] }
+bevy_rapier2d = { version = "0.26.0", features = ["wasm-bindgen"] }
+itertools = "0.12.1"
+rand = "0.8.5"

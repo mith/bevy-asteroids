@@ -1,4 +1,9 @@
-use bevy::{math::Vec3Swizzles, prelude::*, sprite::MaterialMesh2dBundle};
+use core::time;
+
+use bevy::{
+    math::Vec3Swizzles, prelude::*, render::mesh::VertexAttributeValues,
+    sprite::MaterialMesh2dBundle,
+};
 use bevy_rapier2d::prelude::*;
 use rand::Rng;
 
@@ -52,6 +57,9 @@ struct Player;
 struct Ship;
 
 #[derive(Component)]
+struct Thruster;
+
+#[derive(Component)]
 struct Throttling;
 
 fn spawn_player(
@@ -63,17 +71,32 @@ fn spawn_player(
 
     let player_mesh = Mesh::from(player_shape);
     let collider = mesh_to_collider(&player_mesh);
-    commands.spawn((
-        Player,
-        Ship,
-        MaterialMesh2dBundle {
-            mesh: meshes.add(player_mesh).into(),
-            material: materials.add(ColorMaterial::from(Color::WHITE)),
-            ..default()
-        },
-        RigidBody::Dynamic,
-        collider,
-    ));
+    commands
+        .spawn((
+            Name::new("Player"),
+            Player,
+            Ship,
+            MaterialMesh2dBundle {
+                mesh: meshes.add(player_mesh).into(),
+                material: materials.add(ColorMaterial::from(Color::WHITE)),
+                ..default()
+            },
+            RigidBody::Dynamic,
+            collider,
+        ))
+        .with_children(|parent| {
+            parent.spawn((
+                Name::new("Thruster"),
+                Thruster,
+                MaterialMesh2dBundle {
+                    transform: Transform::from_translation(Vec3::new(0., -10., 0.)),
+                    mesh: meshes.add(Mesh::from(RegularPolygon::new(5., 3))).into(),
+                    material: materials.add(ColorMaterial::from(Color::RED)),
+                    visibility: Visibility::Hidden,
+                    ..default()
+                },
+            ));
+        });
 }
 
 fn player_ship_input(
@@ -113,22 +136,49 @@ fn player_ship_input(
 
 fn ship_movement(
     mut commands: Commands,
-    ship_query: Query<(Entity, &Transform, Option<&Throttling>), With<Ship>>,
+    ship_query: Query<(Entity, &Transform, Option<&Throttling>, &Children), With<Ship>>,
+    mut thruster_query: Query<&mut Handle<ColorMaterial>, With<Thruster>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    time: Res<Time>,
 ) {
-    for (ship_entity, global_transform, throttling) in &ship_query {
+    let ship_power = 500.;
+    let thruster_fade_speed = 1.;
+
+    for (ship_entity, global_transform, throttling, children) in &ship_query {
+        let thruster_entity = children
+            .iter()
+            .find(|child_entity| thruster_query.contains(**child_entity))
+            .copied()
+            .unwrap();
+
+        let thruster_material_handle = thruster_query.get_mut(thruster_entity).unwrap();
+
+        let thruster_material = materials.get_mut(thruster_material_handle.clone()).unwrap();
+
         if throttling.is_some() {
             let force = global_transform
                 .rotation
                 .mul_vec3(Vec3::new(0., 1., 0.))
                 .xy();
 
-            let ship_power = 500.;
             commands.entity(ship_entity).insert(ExternalImpulse {
                 impulse: force * ship_power,
                 ..default()
             });
+            commands.entity(thruster_entity).insert(Visibility::Visible);
+
+            let thruster_transparency = thruster_material.color.a();
+            thruster_material.color = thruster_material
+                .color
+                .with_a(thruster_transparency.lerp(1., time.delta_seconds() * thruster_fade_speed));
         } else {
             commands.entity(ship_entity).remove::<ExternalImpulse>();
+            commands.entity(thruster_entity).insert(Visibility::Hidden);
+
+            let thruster_transparency = thruster_material.color.a();
+            thruster_material.color = thruster_material.color.with_a(
+                thruster_transparency.lerp(0., time.delta_seconds() * thruster_fade_speed * 2.),
+            );
         }
     }
 }
@@ -234,55 +284,95 @@ fn mesh_to_collider(mesh: &Mesh) -> Collider {
 }
 
 #[derive(Component)]
-struct Asteroid;
+struct Asteroid {
+    splits_left: u8,
+}
+
+const ASTEROID_MAX_VERTICE_DRIFT: f32 = 10.;
+const ASTEROID_MAX_SPAWN_LIN_VELOCITY: f32 = 50.;
+const ASTEROID_MAX_SPAWN_ANG_VELOCITY: f32 = 1.;
 
 fn spawn_asteroids(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
-    // spawn 10 asteroids of random size and position
-    for _ in 0..10 {
+    let mut asteroid_positions: Vec<Vec2> = Vec::new();
+    while asteroid_positions.len() < 10 {
         let mut rng = rand::thread_rng();
-        let asteroid_size = Vec2::new(50., 50.);
         let max_x = 500.;
         let max_y = 500.;
         let asteroid_pos = Vec2::new(
             rng.gen_range(-max_x..max_x), // x
             rng.gen_range(-max_y..max_y), // y
         );
+
         // skip spawning asteroids on top of player
         if asteroid_pos.length() < 100. {
             continue;
         }
+
+        // skip spawning asteroids on top of other asteroids
+        if asteroid_positions
+            .iter()
+            .any(|&pos| (pos - asteroid_pos).length() < 100.)
+        {
+            continue;
+        }
+
+        asteroid_positions.push(asteroid_pos);
+
         let asteroid_velocity = Vec2::new(
-            rng.gen_range(-1.0..1.0), // x
-            rng.gen_range(-1.0..1.0), // y
+            rng.gen_range(-ASTEROID_MAX_SPAWN_LIN_VELOCITY..ASTEROID_MAX_SPAWN_LIN_VELOCITY), // x
+            rng.gen_range(-ASTEROID_MAX_SPAWN_LIN_VELOCITY..ASTEROID_MAX_SPAWN_LIN_VELOCITY), // y
         );
-        let asteroid_angular_velocity = rng.gen_range(-1.0..1.0);
+        let asteroid_angular_velocity =
+            rng.gen_range(-ASTEROID_MAX_SPAWN_ANG_VELOCITY..ASTEROID_MAX_SPAWN_ANG_VELOCITY);
+
+        let asteroid_shape = RegularPolygon::new(50., 10);
+        let mut asteroid_mesh = Mesh::from(asteroid_shape);
+
+        let Some(pos_attributes) = asteroid_mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION) else {
+            unreachable!("Mesh does not have position attribute");
+        };
+
+        let VertexAttributeValues::Float32x3(pos_attr_vec3) = dbg!(pos_attributes) else {
+            unreachable!("Position attribute is not a Float32x3");
+        };
+
+        pos_attr_vec3.iter_mut().for_each(|v| {
+            // Translate vertice randomly
+            v[0] += rng.gen_range(-ASTEROID_MAX_VERTICE_DRIFT..ASTEROID_MAX_VERTICE_DRIFT);
+            v[1] += rng.gen_range(-ASTEROID_MAX_VERTICE_DRIFT..ASTEROID_MAX_VERTICE_DRIFT);
+        });
+
+        let collider = mesh_to_collider(&asteroid_mesh);
+
         commands.spawn((
-            Asteroid,
+            Asteroid { splits_left: 2 },
             MaterialMesh2dBundle {
                 transform: Transform::default().with_translation(Vec3::new(
                     asteroid_pos.x,
                     asteroid_pos.y,
                     0.,
                 )),
-                mesh: meshes
-                    .add(Mesh::from(shape::Quad::new(asteroid_size)))
-                    .into(),
+                mesh: meshes.add(asteroid_mesh).into(),
                 material: materials.add(ColorMaterial::from(Color::WHITE)),
                 ..default()
             },
             RigidBody::Dynamic,
-            Collider::cuboid(asteroid_size.x * 0.5, asteroid_size.y * 0.5),
+            collider,
             Velocity {
                 linvel: asteroid_velocity,
                 angvel: asteroid_angular_velocity,
-                ..default()
             },
             Restitution {
                 coefficient: 0.9,
+                ..default()
+            },
+            Sleeping {
+                normalized_linear_threshold: 0.001,
+                angular_threshold: 0.001,
                 ..default()
             },
             ActiveEvents::COLLISION_EVENTS,

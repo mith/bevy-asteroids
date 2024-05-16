@@ -88,9 +88,7 @@ struct Original {
 }
 
 #[derive(Component, Debug)]
-struct Duplicate {
-    original: Entity,
-}
+struct Duplicate;
 
 fn duplicate_on_map_edge(
     mut commands: Commands,
@@ -107,7 +105,7 @@ fn duplicate_on_map_edge(
     >,
     bounds: Res<Bounds>,
 ) {
-    for (entity, transform, collider, mesh_handle, material_handle, mut opt_original) in
+    for (entity, transform, collider, mesh_handle, material_handle, opt_original) in
         duplicable_query.iter()
     {
         let positions = edge_positions(transform, collider, &bounds);
@@ -131,7 +129,6 @@ fn duplicate_on_map_edge(
             let offset_y = bounds.0.y * 2. - transform.translation().y.signum();
             let duplicate_y = spawn_duplicate(
                 &mut commands,
-                entity,
                 transform,
                 mesh_handle,
                 material_handle,
@@ -146,7 +143,6 @@ fn duplicate_on_map_edge(
             let offset_x = bounds.0.x * 2. * -transform.translation().x.signum();
             let duplicate_x = spawn_duplicate(
                 &mut commands,
-                entity,
                 transform,
                 mesh_handle,
                 material_handle,
@@ -167,7 +163,6 @@ fn duplicate_on_map_edge(
             );
             let duplicate_xy = spawn_duplicate(
                 &mut commands,
-                entity,
                 transform,
                 mesh_handle,
                 material_handle,
@@ -189,7 +184,6 @@ fn duplicate_on_map_edge(
 
 fn spawn_duplicate(
     commands: &mut Commands,
-    original: Entity,
     transform: &GlobalTransform,
     mesh_handle: &Mesh2dHandle,
     material_handle: &Handle<ColorMaterial>,
@@ -198,7 +192,7 @@ fn spawn_duplicate(
 ) -> Entity {
     commands
         .spawn((
-            Duplicate { original },
+            Duplicate,
             MaterialMesh2dBundle {
                 mesh: mesh_handle.clone(),
                 material: material_handle.clone(),

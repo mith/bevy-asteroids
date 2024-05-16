@@ -2,14 +2,12 @@ mod edge_wrap;
 mod utils;
 
 use bevy::{
-    math::Vec3Swizzles,
-    prelude::*,
-    render::mesh::VertexAttributeValues,
-    sprite::{MaterialMesh2dBundle, Mesh2dHandle},
+    math::Vec3Swizzles, prelude::*, render::mesh::VertexAttributeValues,
+    sprite::MaterialMesh2dBundle,
 };
-use bevy_rapier2d::{
-    na::{Isometry2, Vector2},
-    prelude::*,
+use bevy_rapier2d::prelude::{
+    ActiveEvents, CollisionEvent, ExternalImpulse, NoUserData, RapierConfiguration,
+    RapierDebugRenderPlugin, RapierPhysicsPlugin, Restitution, RigidBody, Sleeping, Velocity,
 };
 use edge_wrap::{Duplicable, EdgeWrapPlugin, EdgeWrapSet};
 use rand::Rng;
@@ -286,9 +284,7 @@ fn clear_game_result(mut commands: Commands, finish_text_query: Query<Entity, Wi
 }
 
 #[derive(Component)]
-struct Asteroid {
-    splits_left: u8,
-}
+struct Asteroid;
 
 const ASTEROID_SPAWN_COUNT: usize = 10;
 const ASTEROID_MAX_VERTICE_DRIFT: f32 = 10.;
@@ -352,7 +348,7 @@ fn spawn_asteroids(
         let collider = mesh_to_collider(&asteroid_mesh);
 
         commands.spawn((
-            Asteroid { splits_left: 2 },
+            Asteroid,
             MaterialMesh2dBundle {
                 transform: Transform::default().with_translation(Vec3::new(
                     asteroid_pos.x,

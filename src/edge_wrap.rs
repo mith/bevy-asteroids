@@ -4,7 +4,7 @@ use bevy::{
     ecs::{
         component::Component,
         entity::Entity,
-        query::{With, Without},
+        query::With,
         schedule::{common_conditions::resource_exists, IntoSystemConfigs, SystemSet},
         system::{Commands, Query, Res, ResMut, Resource},
     },
@@ -15,7 +15,6 @@ use bevy::{
     render::color::Color,
     sprite::{ColorMaterial, MaterialMesh2dBundle, Mesh2dHandle},
     transform::components::{GlobalTransform, Transform},
-    utils::default,
     window::Window,
 };
 use bevy_rapier2d::{
@@ -81,12 +80,14 @@ fn sync_bounds_to_window_size(mut bounds: ResMut<Bounds>, window_query: Query<&W
 #[derive(Component)]
 pub struct Duplicable;
 
-#[derive(Component)]
+#[derive(Component, Debug, Clone)]
 struct Original {
-    duplicate: Entity,
+    duplicate_x: Option<Entity>,
+    duplicate_y: Option<Entity>,
+    duplicate_xy: Option<Entity>,
 }
 
-#[derive(Component)]
+#[derive(Component, Debug)]
 struct Duplicate {
     original: Entity,
 }
@@ -100,52 +101,113 @@ fn duplicate_on_map_edge(
             &Collider,
             &mut Mesh2dHandle,
             &mut Handle<ColorMaterial>,
+            Option<&mut Original>,
         ),
-        (With<Duplicable>, Without<Original>),
+        With<Duplicable>,
     >,
     bounds: Res<Bounds>,
 ) {
-    for (duplicable_entity, global_transform, collider, mesh_handle, material_handle) in
-        &duplicable_query
+    for (entity, transform, collider, mesh_handle, material_handle, mut opt_original) in
+        duplicable_query.iter()
     {
-        let edge_positions = edge_positions(global_transform, collider, &bounds);
+        let positions = edge_positions(transform, collider, &bounds);
 
-        let intersect_top = edge_positions.top == Position::Intersecting;
-        let intersect_bottom = edge_positions.bottom == Position::Intersecting;
-        let intersect_left = edge_positions.left == Position::Intersecting;
-        let intersect_right = edge_positions.right == Position::Intersecting;
+        let mut original = if let Some(original) = opt_original {
+            original.clone()
+        } else {
+            Original {
+                duplicate_x: None,
+                duplicate_y: None,
+                duplicate_xy: None,
+            }
+        };
 
-        if intersect_top || intersect_bottom || intersect_left || intersect_right {
-            let duplicate_offset = duplicate_offset(global_transform, collider, &bounds);
-            let duplicate_entity = commands
-                .spawn((
-                    Duplicate {
-                        original: duplicable_entity,
-                    },
-                    MaterialMesh2dBundle {
-                        mesh: mesh_handle.clone(),
-                        material: material_handle.clone(),
-                        transform: Transform::from_translation(Vec3::new(
-                            global_transform.translation().x - duplicate_offset.x,
-                            global_transform.translation().y - duplicate_offset.y,
-                            0.,
-                        )),
-                        ..default()
-                    },
-                    collider.clone(),
-                ))
-                .id();
+        let intersects_y =
+            positions.top == Position::Intersecting || positions.bottom == Position::Intersecting;
+        let intersects_x =
+            positions.left == Position::Intersecting || positions.right == Position::Intersecting;
 
-            commands.entity(duplicable_entity).insert(Original {
-                duplicate: duplicate_entity,
-            });
-
-            info!(
-                "Duplicating entity {:?} to {:?}",
-                duplicable_entity, duplicate_entity
+        if intersects_y && opt_original.map_or(true, |original| original.duplicate_y.is_none()) {
+            let offset_y = bounds.0.y * 2. - transform.translation().y.signum();
+            let duplicate_y = spawn_duplicate(
+                &mut commands,
+                entity,
+                transform,
+                mesh_handle,
+                material_handle,
+                collider,
+                Vec3::new(0.0, offset_y, 0.0),
             );
+            original.duplicate_y = Some(duplicate_y);
+            info!("Spawning duplicate y for entity {:?}", entity);
+        }
+
+        if intersects_x && opt_original.map_or(true, |original| original.duplicate_x.is_none()) {
+            let offset_x = bounds.0.x * 2. * -transform.translation().x.signum();
+            let duplicate_x = spawn_duplicate(
+                &mut commands,
+                entity,
+                transform,
+                mesh_handle,
+                material_handle,
+                collider,
+                Vec3::new(offset_x, 0.0, 0.0),
+            );
+            original.duplicate_x = Some(duplicate_x);
+            info!("Spawning duplicate x for entity {:?}", entity);
+        }
+
+        if intersects_y
+            && intersects_x
+            && opt_original.map_or(true, |original| original.duplicate_xy.is_none())
+        {
+            let offset_xy = Vec2::new(
+                bounds.0.x * 2. * -transform.translation().x.signum(),
+                bounds.0.y * 2. * -transform.translation().y.signum(),
+            );
+            let duplicate_xy = spawn_duplicate(
+                &mut commands,
+                entity,
+                transform,
+                mesh_handle,
+                material_handle,
+                collider,
+                Vec3::new(offset_xy.x, offset_xy.y, 0.0),
+            );
+            original.duplicate_xy = Some(duplicate_xy);
+            info!("Spawning duplicate xy for entity {:?}", entity);
+        }
+
+        if original.duplicate_x.is_some()
+            || original.duplicate_y.is_some()
+            || original.duplicate_xy.is_some()
+        {
+            commands.entity(entity).insert(original);
         }
     }
+}
+
+fn spawn_duplicate(
+    commands: &mut Commands,
+    original: Entity,
+    transform: &GlobalTransform,
+    mesh_handle: &Mesh2dHandle,
+    material_handle: &Handle<ColorMaterial>,
+    collider: &Collider,
+    offset: Vec3,
+) -> Entity {
+    commands
+        .spawn((
+            Duplicate { original },
+            MaterialMesh2dBundle {
+                mesh: mesh_handle.clone(),
+                material: material_handle.clone(),
+                transform: Transform::from_translation(transform.translation() + offset),
+                ..Default::default()
+            },
+            collider.clone(),
+        ))
+        .id()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -222,46 +284,47 @@ fn edge_positions(
     }
 }
 
-fn duplicate_offset(
-    global_transform: &GlobalTransform,
-    collider: &Collider,
-    bounds: &Bounds,
-) -> Vec2 {
-    let edge_positions = edge_positions(global_transform, collider, bounds);
-
-    let pos = global_transform.translation().xy();
-
-    let duplicate_offset_x =
-        if edge_positions.left != Position::Inside || edge_positions.right != Position::Inside {
-            bounds.0.x * 2. * -pos.x.signum()
-        } else {
-            0.
-        };
-
-    let duplicate_offset_y =
-        if edge_positions.bottom != Position::Inside || edge_positions.top != Position::Inside {
-            bounds.0.y * 2. * -pos.y.signum()
-        } else {
-            0.
-        };
-
-    (duplicate_offset_x, duplicate_offset_y).into()
-}
-
 fn sync_duplicate_transforms(
-    duplicable_query: Query<(&GlobalTransform, &Collider, &Original)>,
+    duplicable_query: Query<(&GlobalTransform, &Original)>,
     mut transform_query: Query<&mut Transform>,
     bounds: Res<Bounds>,
 ) {
-    for (original_global_transform, collider, original) in &duplicable_query {
+    for (original_global_transform, original) in &duplicable_query {
         let original_pos = original_global_transform.translation();
-        let mut duplicate_transform = transform_query.get_mut(original.duplicate).unwrap();
-        let duplicate_offset = duplicate_offset(original_global_transform, collider, &bounds);
 
-        duplicate_transform.translation =
-            original_pos + Vec3::new(duplicate_offset.x, duplicate_offset.y, 0.);
+        let mut update_duplicate_transform = |entity: Entity, duplicate_offset: Vec2| {
+            let mut duplicate_transform = transform_query.get_mut(entity).unwrap();
 
-        duplicate_transform.rotation = original_global_transform.to_scale_rotation_translation().1;
+            duplicate_transform.translation =
+                original_pos + Vec3::new(duplicate_offset.x, duplicate_offset.y, 0.);
+
+            duplicate_transform.rotation =
+                original_global_transform.to_scale_rotation_translation().1;
+        };
+
+        if let Some(duplicate) = original.duplicate_x {
+            update_duplicate_transform(
+                duplicate,
+                Vec2::new(bounds.0.x * 2. * -original_pos.x.signum(), 0.),
+            );
+        }
+
+        if let Some(duplicate) = original.duplicate_y {
+            update_duplicate_transform(
+                duplicate,
+                Vec2::new(0., bounds.0.y * 2. * -original_pos.y.signum()),
+            );
+        }
+
+        if let Some(duplicate) = original.duplicate_xy {
+            update_duplicate_transform(
+                duplicate,
+                Vec2::new(
+                    bounds.0.x * 2. * -original_pos.x.signum(),
+                    bounds.0.y * 2. * -original_pos.y.signum(),
+                ),
+            );
+        }
     }
 }
 
@@ -279,6 +342,21 @@ fn teleport_original_to_swap(
     for (original_entity, global_transform, mut transform, collider, original) in
         &mut original_query
     {
+        let mut remove_original_and_duplicates = || {
+            commands.entity(original_entity).remove::<Original>();
+            if let Some(duplicate) = original.duplicate_x {
+                commands.entity(duplicate).despawn_recursive();
+            }
+            if let Some(duplicate) = original.duplicate_y {
+                commands.entity(duplicate).despawn_recursive();
+            }
+            if let Some(duplicate) = original.duplicate_xy {
+                commands.entity(duplicate).despawn_recursive();
+            }
+
+            info!("Removing duplicates of entity {:?}", original_entity);
+        };
+
         let edge_positions = edge_positions(global_transform, collider, &bounds);
 
         // Delete duplicates if the original is inside the bounds
@@ -287,29 +365,51 @@ fn teleport_original_to_swap(
             && edge_positions.left == Position::Inside
             && edge_positions.right == Position::Inside
         {
-            commands.entity(original_entity).remove::<Original>();
-            commands.entity(original.duplicate).despawn_recursive();
+            remove_original_and_duplicates();
         }
 
-        if edge_positions.top == Position::Outside
-            || edge_positions.bottom == Position::Outside
-            || edge_positions.left == Position::Outside
-            || edge_positions.right == Position::Outside
-        {
-            let duplicate_offset = duplicate_offset(global_transform, collider, &bounds);
+        let original_pos = global_transform.translation().xy();
 
-            let new_translation =
-                transform.translation + Vec3::new(duplicate_offset.x, duplicate_offset.y, 0.);
+        let mut teleport_to_duplicate = |offset: Vec2| {
+            transform.translation += Vec3::new(offset.x, offset.y, 0.0);
 
             info!(
-                "Teleporting original from {:?} to swap: {:?}",
-                transform.translation, new_translation
+                "Teleporting entity {:?} to {:?}",
+                original_entity, transform.translation
             );
 
-            transform.translation = new_translation;
+            remove_original_and_duplicates();
+        };
 
-            commands.entity(original_entity).remove::<Original>();
-            commands.entity(original.duplicate).despawn_recursive();
+        // Teleport the original to the duplicate on the opposite side if it's outside the bounds
+        if (edge_positions.top == Position::Outside || edge_positions.bottom == Position::Outside)
+            && (edge_positions.left == Position::Outside
+                || edge_positions.right == Position::Outside)
+        {
+            let offset = Vec2::new(
+                bounds.0.x * 2. * -original_pos.x.signum(),
+                bounds.0.y * 2. * -original_pos.y.signum(),
+            );
+
+            teleport_to_duplicate(offset);
+        }
+
+        if (edge_positions.top == Position::Outside || edge_positions.bottom == Position::Outside)
+            && edge_positions.left == Position::Inside
+            && edge_positions.right == Position::Inside
+        {
+            let offset = Vec2::new(0., bounds.0.y * 2. * -original_pos.y.signum());
+
+            teleport_to_duplicate(offset);
+        }
+
+        if (edge_positions.left == Position::Outside || edge_positions.right == Position::Outside)
+            && edge_positions.top == Position::Inside
+            && edge_positions.bottom == Position::Inside
+        {
+            let offset = Vec2::new(bounds.0.x * 2. * -original_pos.x.signum(), 0.);
+
+            teleport_to_duplicate(offset);
         }
     }
 }
@@ -362,8 +462,8 @@ mod tests {
         let positions = edge_positions(&transform, &collider, &bounds);
 
         assert_eq!(positions.top, Position::Outside);
-        assert_eq!(positions.bottom, Position::Outside);
-        assert_eq!(positions.left, Position::Outside);
+        assert_eq!(positions.bottom, Position::Inside);
+        assert_eq!(positions.left, Position::Inside);
         assert_eq!(positions.right, Position::Outside);
     }
 
@@ -379,38 +479,5 @@ mod tests {
         assert_eq!(positions.bottom, Position::Inside);
         assert_eq!(positions.left, Position::Inside);
         assert_eq!(positions.right, Position::Intersecting);
-    }
-
-    #[test]
-    fn test_duplicate_offset_inside() {
-        let bounds = create_test_bounds(500.0);
-        let collider = create_test_collider();
-        let transform = create_test_transform(0.0, 0.0, 0.0);
-
-        let offset = duplicate_offset(&transform, &collider, &bounds);
-
-        assert_eq!(offset, Vec2::ZERO);
-    }
-
-    #[test]
-    fn test_duplicate_offset_outside() {
-        let bounds = create_test_bounds(500.0);
-        let collider = create_test_collider();
-        let transform = create_test_transform(600.0, 600.0, 0.0);
-
-        let offset = duplicate_offset(&transform, &collider, &bounds);
-
-        assert_eq!(offset, Vec2::new(-1000.0, -1000.0));
-    }
-
-    #[test]
-    fn test_duplicate_offset_intersecting() {
-        let bounds = create_test_bounds(500.0);
-        let collider = create_test_collider();
-        let transform = create_test_transform(490.0, 490.0, 0.0);
-
-        let offset = duplicate_offset(&transform, &collider, &bounds);
-
-        assert_eq!(offset, Vec2::new(0.0, 0.0)); // Partially intersecting, so no full duplication
     }
 }

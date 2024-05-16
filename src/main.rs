@@ -290,6 +290,7 @@ struct Asteroid {
     splits_left: u8,
 }
 
+const ASTEROID_SPAWN_COUNT: usize = 10;
 const ASTEROID_MAX_VERTICE_DRIFT: f32 = 10.;
 const ASTEROID_MAX_SPAWN_LIN_VELOCITY: f32 = 50.;
 const ASTEROID_MAX_SPAWN_ANG_VELOCITY: f32 = 1.;
@@ -300,7 +301,7 @@ fn spawn_asteroids(
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     let mut asteroid_positions: Vec<Vec2> = Vec::new();
-    while asteroid_positions.len() < 3 {
+    while asteroid_positions.len() < ASTEROID_SPAWN_COUNT {
         let mut rng = rand::thread_rng();
         let max_x = 500.;
         let max_y = 500.;

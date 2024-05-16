@@ -1,11 +1,19 @@
-use core::time;
+mod edge_wrap;
+mod utils;
 
 use bevy::{
-    math::Vec3Swizzles, prelude::*, render::mesh::VertexAttributeValues,
-    sprite::MaterialMesh2dBundle,
+    math::Vec3Swizzles,
+    prelude::*,
+    render::mesh::VertexAttributeValues,
+    sprite::{MaterialMesh2dBundle, Mesh2dHandle},
 };
-use bevy_rapier2d::prelude::*;
+use bevy_rapier2d::{
+    na::{Isometry2, Vector2},
+    prelude::*,
+};
+use edge_wrap::{Duplicable, EdgeWrapPlugin, EdgeWrapSet};
 use rand::Rng;
+use utils::mesh_to_collider;
 
 const PHYSICS_LENGTH_UNIT: f32 = 100.0;
 
@@ -23,8 +31,10 @@ fn main() {
             RapierDebugRenderPlugin::default(),
         ))
         .init_state::<GameState>()
+        .add_plugins(EdgeWrapPlugin)
         .add_systems(Startup, setup_camera)
-        .add_systems(OnEnter(GameState::Playing), (spawn_player, spawn_asteroids))
+        .add_systems(OnEnter(GameState::Playing), spawn_player)
+        .add_systems(OnEnter(GameState::Playing), spawn_asteroids)
         .add_systems(
             OnExit(GameState::Finished),
             (despawn_player, despawn_asteroids),
@@ -34,13 +44,18 @@ fn main() {
         .add_systems(
             Update,
             (
-                player_ship_input,
-                ship_movement,
-                teleport_on_map_edge,
-                player_asteroid_collision,
+                player_ship_input.run_if(in_state(GameState::Playing)),
+                stop_ship.run_if(not(in_state(GameState::Playing))),
+                apply_deferred,
             )
-                .run_if(in_state(GameState::Playing))
-                .chain(),
+                .chain()
+                .before(EdgeWrapSet),
+        )
+        .add_systems(
+            Update,
+            (ship_movement, apply_deferred, player_asteroid_collision)
+                .chain()
+                .after(EdgeWrapSet),
         );
 
     app.run();
@@ -67,6 +82,20 @@ fn spawn_player(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
+    spawn_player_ship(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        Transform::default(),
+    );
+}
+
+fn spawn_player_ship(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<ColorMaterial>,
+    transform: Transform,
+) {
     let player_shape = RegularPolygon::new(10., 3);
 
     let player_mesh = Mesh::from(player_shape);
@@ -79,10 +108,12 @@ fn spawn_player(
             MaterialMesh2dBundle {
                 mesh: meshes.add(player_mesh).into(),
                 material: materials.add(ColorMaterial::from(Color::WHITE)),
+                transform,
                 ..default()
             },
             RigidBody::Dynamic,
             collider,
+            Duplicable,
         ))
         .with_children(|parent| {
             parent.spawn((
@@ -134,6 +165,12 @@ fn player_ship_input(
     }
 }
 
+fn stop_ship(mut commands: Commands, player_query: Query<Entity, With<Player>>) {
+    for player_entity in player_query.iter() {
+        commands.entity(player_entity).remove::<Throttling>();
+    }
+}
+
 fn ship_movement(
     mut commands: Commands,
     ship_query: Query<(Entity, &Transform, Option<&Throttling>, &Children), With<Ship>>,
@@ -179,19 +216,6 @@ fn ship_movement(
             thruster_material.color = thruster_material.color.with_a(
                 thruster_transparency.lerp(0., time.delta_seconds() * thruster_fade_speed * 2.),
             );
-        }
-    }
-}
-
-fn teleport_on_map_edge(mut query: Query<&mut Transform, With<RigidBody>>) {
-    for mut transform in &mut query {
-        let pos = transform.translation;
-        let bounds = 500.;
-        if pos.x.abs() > bounds {
-            transform.translation.x = pos.x - (bounds * 2. * pos.x.signum());
-        }
-        if pos.y.abs() > 500. {
-            transform.translation.y = pos.y - (bounds * 2. * pos.y.signum());
         }
     }
 }
@@ -261,28 +285,6 @@ fn clear_game_result(mut commands: Commands, finish_text_query: Query<Entity, Wi
     }
 }
 
-fn mesh_to_collider(mesh: &Mesh) -> Collider {
-    let vertices = mesh
-        .attribute(Mesh::ATTRIBUTE_POSITION)
-        .unwrap()
-        .as_float3()
-        .unwrap()
-        .to_vec()
-        .iter()
-        .map(|pos| Vec2::new(pos[0], pos[1]))
-        .collect::<_>();
-    let indices_vec = mesh
-        .indices()
-        .unwrap()
-        .iter()
-        .map(|i| i as u32)
-        .collect::<Vec<u32>>()
-        .chunks(3)
-        .map(|chunk| [chunk[0], chunk[1], chunk[2]])
-        .collect::<_>();
-    Collider::trimesh(vertices, indices_vec)
-}
-
 #[derive(Component)]
 struct Asteroid {
     splits_left: u8,
@@ -298,7 +300,7 @@ fn spawn_asteroids(
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     let mut asteroid_positions: Vec<Vec2> = Vec::new();
-    while asteroid_positions.len() < 10 {
+    while asteroid_positions.len() < 3 {
         let mut rng = rand::thread_rng();
         let max_x = 500.;
         let max_y = 500.;
@@ -332,12 +334,12 @@ fn spawn_asteroids(
         let asteroid_shape = RegularPolygon::new(50., 10);
         let mut asteroid_mesh = Mesh::from(asteroid_shape);
 
-        let Some(pos_attributes) = asteroid_mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION) else {
-            unreachable!("Mesh does not have position attribute");
-        };
+        let pos_attributes = asteroid_mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION).expect(
+            "Mesh does not have a position attribute. This should not happen as we just created the mesh",
+        );
 
-        let VertexAttributeValues::Float32x3(pos_attr_vec3) = dbg!(pos_attributes) else {
-            unreachable!("Position attribute is not a Float32x3");
+        let VertexAttributeValues::Float32x3(pos_attr_vec3) = pos_attributes else {
+            panic!("Position attribute is not a Float32x3");
         };
 
         pos_attr_vec3.iter_mut().for_each(|v| {
@@ -376,6 +378,7 @@ fn spawn_asteroids(
                 ..default()
             },
             ActiveEvents::COLLISION_EVENTS,
+            Duplicable,
         ));
     }
 }

@@ -5,7 +5,7 @@ use bevy::{
         component::Component,
         entity::Entity,
         query::{With, Without},
-        schedule::{IntoSystemConfigs, SystemSet},
+        schedule::{common_conditions::resource_exists, IntoSystemConfigs, SystemSet},
         system::{Commands, Query, Res, ResMut, Resource},
     },
     gizmos::gizmos::Gizmos,
@@ -34,7 +34,7 @@ impl Plugin for EdgeWrapPlugin {
                 duplicate_on_map_edge,
                 sync_duplicate_transforms,
                 teleport_original_to_swap,
-                draw_bounds_gizmos,
+                draw_bounds_gizmos.run_if(resource_exists::<BoundsDebug>),
             )
                 .chain()
                 .in_set(EdgeWrapSet),
@@ -46,13 +46,14 @@ impl Plugin for EdgeWrapPlugin {
 pub struct EdgeWrapSet;
 
 #[derive(Resource)]
-pub struct Bounds {
-    distance: f32,
-}
+pub struct BoundsDebug;
+
+#[derive(Resource)]
+pub struct Bounds(Vec2);
 
 impl Default for Bounds {
     fn default() -> Self {
-        Self { distance: 500.0 }
+        Self(Vec2::new(500.0, 500.0))
     }
 }
 
@@ -60,7 +61,7 @@ fn draw_bounds_gizmos(mut gizmos: Gizmos, bounds: Res<Bounds>) {
     gizmos.rect_2d(
         Vec2::ZERO,
         0.,
-        Vec2::new(bounds.distance * 2., bounds.distance * 2.),
+        Vec2::new(bounds.0.x * 2., bounds.0.y * 2.),
         Color::WHITE,
     );
 }
@@ -71,7 +72,10 @@ fn sync_bounds_to_window_size(mut bounds: ResMut<Bounds>, window_query: Query<&W
         return;
     };
 
-    bounds.distance = window.resolution.width().min(window.resolution.height()) / 2.;
+    bounds.0 = Vec2::new(
+        window.resolution.width() / 2.,
+        window.resolution.height() / 2.,
+    );
 }
 
 #[derive(Component)]
@@ -178,33 +182,33 @@ fn edge_positions(
     let max_x = pos.x + aabb.half_extents().x;
     let min_x = pos.x - aabb.half_extents().x;
 
-    let top = if min_y > bounds.distance {
+    let top = if min_y > bounds.0.y {
         Position::Outside
-    } else if max_y > bounds.distance {
+    } else if max_y > bounds.0.y {
         Position::Intersecting
     } else {
         Position::Inside
     };
 
-    let bottom = if max_y < -bounds.distance {
+    let bottom = if max_y < -bounds.0.y {
         Position::Outside
-    } else if min_y < -bounds.distance {
+    } else if min_y < -bounds.0.y {
         Position::Intersecting
     } else {
         Position::Inside
     };
 
-    let left = if max_x < -bounds.distance {
+    let left = if max_x < -bounds.0.x {
         Position::Outside
-    } else if min_x < -bounds.distance {
+    } else if min_x < -bounds.0.x {
         Position::Intersecting
     } else {
         Position::Inside
     };
 
-    let right = if min_x > bounds.distance {
+    let right = if min_x > bounds.0.x {
         Position::Outside
-    } else if max_x > bounds.distance {
+    } else if max_x > bounds.0.x {
         Position::Intersecting
     } else {
         Position::Inside
@@ -229,14 +233,14 @@ fn duplicate_offset(
 
     let duplicate_offset_x =
         if edge_positions.left != Position::Inside || edge_positions.right != Position::Inside {
-            bounds.distance * 2. * -pos.x.signum()
+            bounds.0.x * 2. * -pos.x.signum()
         } else {
             0.
         };
 
     let duplicate_offset_y =
         if edge_positions.bottom != Position::Inside || edge_positions.top != Position::Inside {
-            bounds.distance * 2. * -pos.y.signum()
+            bounds.0.y * 2. * -pos.y.signum()
         } else {
             0.
         };
@@ -332,7 +336,7 @@ mod tests {
     }
 
     fn create_test_bounds(distance: f32) -> Bounds {
-        Bounds { distance }
+        Bounds((distance, distance).into())
     }
 
     #[test]

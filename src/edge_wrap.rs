@@ -1,11 +1,13 @@
 use bevy::{
-    app::{App, Plugin, Update},
+    app::{App, First, Plugin, Update},
     asset::Handle,
     ecs::{
         component::Component,
         entity::Entity,
         query::With,
-        schedule::{common_conditions::resource_exists, IntoSystemConfigs, SystemSet},
+        schedule::{
+            apply_deferred, common_conditions::resource_exists, IntoSystemConfigs, SystemSet,
+        },
         system::{Commands, Query, Res, ResMut, Resource},
     },
     gizmos::gizmos::Gizmos,
@@ -26,18 +28,25 @@ pub struct EdgeWrapPlugin;
 
 impl Plugin for EdgeWrapPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Bounds>().add_systems(
-            Update,
-            (
-                sync_bounds_to_window_size,
-                duplicate_on_map_edge,
-                sync_duplicate_transforms,
-                teleport_original_to_swap,
-                draw_bounds_gizmos.run_if(resource_exists::<BoundsDebug>),
+        app.init_resource::<Bounds>()
+            .add_systems(First, sync_bounds_to_window_size)
+            .add_systems(
+                Update,
+                draw_bounds_gizmos
+                    .run_if(resource_exists::<BoundsDebug>)
+                    .in_set(EdgeWrapSet),
             )
-                .chain()
-                .in_set(EdgeWrapSet),
-        );
+            .add_systems(
+                Update,
+                (
+                    duplicate_on_map_edge,
+                    apply_deferred,
+                    sync_duplicate_transforms,
+                    teleport_original_to_swap,
+                )
+                    .chain()
+                    .in_set(EdgeWrapSet),
+            );
     }
 }
 
@@ -48,7 +57,7 @@ pub struct EdgeWrapSet;
 pub struct BoundsDebug;
 
 #[derive(Resource)]
-pub struct Bounds(Vec2);
+pub struct Bounds(pub Vec2);
 
 impl Default for Bounds {
     fn default() -> Self {

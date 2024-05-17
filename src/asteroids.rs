@@ -1,0 +1,135 @@
+use bevy::{
+    asset::Assets,
+    ecs::{
+        component::Component,
+        entity::Entity,
+        query::With,
+        system::{Commands, Query, Res, ResMut},
+    },
+    hierarchy::DespawnRecursiveExt,
+    math::{primitives::RegularPolygon, Vec2, Vec3},
+    render::{
+        color::Color,
+        mesh::{Mesh, VertexAttributeValues},
+    },
+    sprite::{ColorMaterial, MaterialMesh2dBundle},
+    transform::components::Transform,
+    utils::default,
+};
+use bevy_rapier2d::{
+    dynamics::{RigidBody, Sleeping, Velocity},
+    geometry::{ActiveEvents, Restitution},
+};
+use rand::Rng;
+
+use crate::{
+    edge_wrap::{Bounds, Duplicable},
+    utils::mesh_to_collider,
+};
+
+#[derive(Component)]
+pub struct Asteroid;
+
+const ASTEROID_SPAWN_COUNT: usize = 40;
+const ASTEROID_MAX_VERTICE_DRIFT: f32 = 10.;
+const ASTEROID_MAX_SPAWN_LIN_VELOCITY: f32 = 50.;
+const ASTEROID_MAX_SPAWN_ANG_VELOCITY: f32 = 1.;
+
+pub fn spawn_asteroids(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    bounds: Res<Bounds>,
+) {
+    let mut asteroid_positions: Vec<Vec2> = Vec::new();
+    while asteroid_positions.len() < ASTEROID_SPAWN_COUNT {
+        let mut rng = rand::thread_rng();
+        let max_x = bounds.0.x * 2.;
+        let max_y = bounds.0.y * 2.;
+        let asteroid_pos = Vec2::new(
+            rng.gen_range(-max_x..max_x), // x
+            rng.gen_range(-max_y..max_y), // y
+        );
+
+        // skip spawning asteroids on top of player
+        if asteroid_pos.length() < 100. {
+            continue;
+        }
+
+        // skip spawning asteroids on top of other asteroids
+        if asteroid_positions
+            .iter()
+            .any(|&pos| (pos - asteroid_pos).length() < 100.)
+        {
+            continue;
+        }
+
+        asteroid_positions.push(asteroid_pos);
+
+        let asteroid_velocity = Vec2::new(
+            rng.gen_range(-ASTEROID_MAX_SPAWN_LIN_VELOCITY..ASTEROID_MAX_SPAWN_LIN_VELOCITY), // x
+            rng.gen_range(-ASTEROID_MAX_SPAWN_LIN_VELOCITY..ASTEROID_MAX_SPAWN_LIN_VELOCITY), // y
+        );
+        let asteroid_angular_velocity =
+            rng.gen_range(-ASTEROID_MAX_SPAWN_ANG_VELOCITY..ASTEROID_MAX_SPAWN_ANG_VELOCITY);
+
+        let asteroid_shape = RegularPolygon::new(50., 10);
+        let mut asteroid_mesh = Mesh::from(asteroid_shape);
+
+        let pos_attributes = asteroid_mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION).expect(
+            "Mesh does not have a position attribute. This should not happen as we just created the mesh",
+        );
+
+        let VertexAttributeValues::Float32x3(pos_attr_vec3) = pos_attributes else {
+            panic!("Position attribute is not a Float32x3");
+        };
+
+        pos_attr_vec3.iter_mut().for_each(|v| {
+            // Translate vertice randomly
+            v[0] += rng.gen_range(-ASTEROID_MAX_VERTICE_DRIFT..ASTEROID_MAX_VERTICE_DRIFT);
+            v[1] += rng.gen_range(-ASTEROID_MAX_VERTICE_DRIFT..ASTEROID_MAX_VERTICE_DRIFT);
+        });
+
+        let collider = mesh_to_collider(&asteroid_mesh);
+
+        commands.spawn((
+            Asteroid,
+            MaterialMesh2dBundle {
+                transform: Transform::default().with_translation(Vec3::new(
+                    asteroid_pos.x,
+                    asteroid_pos.y,
+                    0.,
+                )),
+                mesh: meshes.add(asteroid_mesh).into(),
+                material: materials.add(ColorMaterial::from(Color::WHITE)),
+                ..default()
+            },
+            RigidBody::Dynamic,
+            collider,
+            Velocity {
+                linvel: asteroid_velocity,
+                angvel: asteroid_angular_velocity,
+            },
+            Restitution {
+                coefficient: 0.9,
+                ..default()
+            },
+            Sleeping {
+                normalized_linear_threshold: 0.001,
+                angular_threshold: 0.001,
+                ..default()
+            },
+            ActiveEvents::COLLISION_EVENTS,
+            Duplicable,
+        ));
+    }
+}
+
+pub fn despawn_asteroids(
+    mut commands: Commands,
+    mut asteroid_query: Query<Entity, With<Asteroid>>,
+) {
+    for asteroid_entity in asteroid_query.iter_mut() {
+        commands.entity(asteroid_entity).despawn_recursive();
+    }
+}

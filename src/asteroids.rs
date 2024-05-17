@@ -30,7 +30,7 @@ use crate::{
 #[derive(Component)]
 pub struct Asteroid;
 
-const ASTEROID_SPAWN_COUNT: usize = 40;
+const ASTEROID_SPAWN_COUNT: usize = 20;
 const ASTEROID_MAX_VERTICE_DRIFT: f32 = 10.;
 const ASTEROID_MAX_SPAWN_LIN_VELOCITY: f32 = 50.;
 const ASTEROID_MAX_SPAWN_ANG_VELOCITY: f32 = 1.;
@@ -52,77 +52,93 @@ pub fn spawn_asteroids(
         );
 
         // skip spawning asteroids on top of player
-        if asteroid_pos.length() < 100. {
+        if asteroid_pos.length() < 150. {
             continue;
         }
 
         // skip spawning asteroids on top of other asteroids
         if asteroid_positions
             .iter()
-            .any(|&pos| (pos - asteroid_pos).length() < 100.)
+            .any(|&pos| (pos - asteroid_pos).length() < 200.)
         {
             continue;
         }
 
         asteroid_positions.push(asteroid_pos);
 
-        let asteroid_velocity = Vec2::new(
-            rng.gen_range(-ASTEROID_MAX_SPAWN_LIN_VELOCITY..ASTEROID_MAX_SPAWN_LIN_VELOCITY), // x
-            rng.gen_range(-ASTEROID_MAX_SPAWN_LIN_VELOCITY..ASTEROID_MAX_SPAWN_LIN_VELOCITY), // y
+        spawn_asteroid(
+            rng,
+            &mut commands,
+            asteroid_pos,
+            &mut meshes,
+            &mut materials,
         );
-        let asteroid_angular_velocity =
-            rng.gen_range(-ASTEROID_MAX_SPAWN_ANG_VELOCITY..ASTEROID_MAX_SPAWN_ANG_VELOCITY);
-
-        let asteroid_shape = RegularPolygon::new(50., 10);
-        let mut asteroid_mesh = Mesh::from(asteroid_shape);
-
-        let pos_attributes = asteroid_mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION).expect(
-            "Mesh does not have a position attribute. This should not happen as we just created the mesh",
-        );
-
-        let VertexAttributeValues::Float32x3(pos_attr_vec3) = pos_attributes else {
-            panic!("Position attribute is not a Float32x3");
-        };
-
-        pos_attr_vec3.iter_mut().for_each(|v| {
-            // Translate vertice randomly
-            v[0] += rng.gen_range(-ASTEROID_MAX_VERTICE_DRIFT..ASTEROID_MAX_VERTICE_DRIFT);
-            v[1] += rng.gen_range(-ASTEROID_MAX_VERTICE_DRIFT..ASTEROID_MAX_VERTICE_DRIFT);
-        });
-
-        let collider = mesh_to_collider(&asteroid_mesh);
-
-        commands.spawn((
-            Asteroid,
-            MaterialMesh2dBundle {
-                transform: Transform::default().with_translation(Vec3::new(
-                    asteroid_pos.x,
-                    asteroid_pos.y,
-                    0.,
-                )),
-                mesh: meshes.add(asteroid_mesh).into(),
-                material: materials.add(ColorMaterial::from(Color::WHITE)),
-                ..default()
-            },
-            RigidBody::Dynamic,
-            collider,
-            Velocity {
-                linvel: asteroid_velocity,
-                angvel: asteroid_angular_velocity,
-            },
-            Restitution {
-                coefficient: 0.9,
-                ..default()
-            },
-            Sleeping {
-                normalized_linear_threshold: 0.001,
-                angular_threshold: 0.001,
-                ..default()
-            },
-            ActiveEvents::COLLISION_EVENTS,
-            Duplicable,
-        ));
     }
+}
+
+fn spawn_asteroid(
+    mut rng: rand::prelude::ThreadRng,
+    commands: &mut Commands,
+    asteroid_pos: Vec2,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<ColorMaterial>>,
+) {
+    let asteroid_velocity = Vec2::new(
+        rng.gen_range(-ASTEROID_MAX_SPAWN_LIN_VELOCITY..ASTEROID_MAX_SPAWN_LIN_VELOCITY), // x
+        rng.gen_range(-ASTEROID_MAX_SPAWN_LIN_VELOCITY..ASTEROID_MAX_SPAWN_LIN_VELOCITY), // y
+    );
+    let asteroid_angular_velocity =
+        rng.gen_range(-ASTEROID_MAX_SPAWN_ANG_VELOCITY..ASTEROID_MAX_SPAWN_ANG_VELOCITY);
+
+    let asteroid_shape = RegularPolygon::new(50., 10);
+    let mut asteroid_mesh = Mesh::from(asteroid_shape);
+
+    let pos_attributes = asteroid_mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION).expect(
+        "Mesh does not have a position attribute. This should not happen as we just created the mesh",
+    );
+
+    let VertexAttributeValues::Float32x3(pos_attr_vec3) = pos_attributes else {
+        panic!("Position attribute is not a Float32x3");
+    };
+
+    pos_attr_vec3.iter_mut().for_each(|v| {
+        // Translate vertice randomly
+        v[0] += rng.gen_range(-ASTEROID_MAX_VERTICE_DRIFT..ASTEROID_MAX_VERTICE_DRIFT);
+        v[1] += rng.gen_range(-ASTEROID_MAX_VERTICE_DRIFT..ASTEROID_MAX_VERTICE_DRIFT);
+    });
+
+    let collider = mesh_to_collider(&asteroid_mesh);
+
+    commands.spawn((
+        Asteroid,
+        MaterialMesh2dBundle {
+            transform: Transform::default().with_translation(Vec3::new(
+                asteroid_pos.x,
+                asteroid_pos.y,
+                0.,
+            )),
+            mesh: meshes.add(asteroid_mesh).into(),
+            material: materials.add(ColorMaterial::from(Color::WHITE)),
+            ..default()
+        },
+        RigidBody::Dynamic,
+        collider,
+        Velocity {
+            linvel: asteroid_velocity,
+            angvel: asteroid_angular_velocity,
+        },
+        Restitution {
+            coefficient: 0.9,
+            ..default()
+        },
+        Sleeping {
+            normalized_linear_threshold: 0.001,
+            angular_threshold: 0.001,
+            ..default()
+        },
+        ActiveEvents::COLLISION_EVENTS,
+        Duplicable,
+    ));
 }
 
 pub fn despawn_asteroids(

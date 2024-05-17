@@ -63,7 +63,7 @@ pub fn ship_movement(
                 .color
                 .with_a(thruster_transparency.lerp(1., time.delta_seconds() * thruster_fade_speed));
         } else {
-            let remove = commands.entity(ship_entity).remove::<ExternalImpulse>();
+            commands.entity(ship_entity).remove::<ExternalImpulse>();
             commands.entity(thruster_entity).insert(Visibility::Hidden);
 
             let thruster_transparency = thruster_material.color.a();

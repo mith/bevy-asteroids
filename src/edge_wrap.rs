@@ -247,37 +247,20 @@ fn edge_positions(
     let max_x = pos.x + aabb.half_extents().x;
     let min_x = pos.x - aabb.half_extents().x;
 
-    let top = if min_y > bounds.0.y {
-        Position::Outside
-    } else if max_y > bounds.0.y {
-        Position::Intersecting
-    } else {
-        Position::Inside
+    let determine_position = |min_edge, max_edge, bound| {
+        if min_edge > bound {
+            Position::Outside
+        } else if max_edge > bound {
+            Position::Intersecting
+        } else {
+            Position::Inside
+        }
     };
 
-    let bottom = if max_y < -bounds.0.y {
-        Position::Outside
-    } else if min_y < -bounds.0.y {
-        Position::Intersecting
-    } else {
-        Position::Inside
-    };
-
-    let left = if max_x < -bounds.0.x {
-        Position::Outside
-    } else if min_x < -bounds.0.x {
-        Position::Intersecting
-    } else {
-        Position::Inside
-    };
-
-    let right = if min_x > bounds.0.x {
-        Position::Outside
-    } else if max_x > bounds.0.x {
-        Position::Intersecting
-    } else {
-        Position::Inside
-    };
+    let top = determine_position(min_y, max_y, bounds.0.y);
+    let bottom = determine_position(-max_y, -min_y, bounds.0.y);
+    let left = determine_position(-max_x, -min_x, bounds.0.x);
+    let right = determine_position(min_x, max_x, bounds.0.x);
 
     EdgePositions {
         top,

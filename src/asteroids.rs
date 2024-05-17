@@ -44,12 +44,9 @@ pub fn spawn_asteroids(
     let mut asteroid_positions: Vec<Vec2> = Vec::new();
     while asteroid_positions.len() < ASTEROID_SPAWN_COUNT {
         let mut rng = rand::thread_rng();
-        let max_x = bounds.0.x * 2.;
-        let max_y = bounds.0.y * 2.;
-        let asteroid_pos = Vec2::new(
-            rng.gen_range(-max_x..max_x), // x
-            rng.gen_range(-max_y..max_y), // y
-        );
+        let max_x = bounds.0.x;
+        let max_y = bounds.0.y;
+        let asteroid_pos = Vec2::new(rng.gen_range(-max_x..max_x), rng.gen_range(-max_y..max_y));
 
         // skip spawning asteroids on top of player
         if asteroid_pos.length() < 150. {
@@ -59,7 +56,7 @@ pub fn spawn_asteroids(
         // skip spawning asteroids on top of other asteroids
         if asteroid_positions
             .iter()
-            .any(|&pos| (pos - asteroid_pos).length() < 200.)
+            .any(|&pos| (pos - asteroid_pos).length() < 150.)
         {
             continue;
         }
@@ -84,8 +81,8 @@ fn spawn_asteroid(
     materials: &mut ResMut<Assets<ColorMaterial>>,
 ) {
     let asteroid_velocity = Vec2::new(
-        rng.gen_range(-ASTEROID_MAX_SPAWN_LIN_VELOCITY..ASTEROID_MAX_SPAWN_LIN_VELOCITY), // x
-        rng.gen_range(-ASTEROID_MAX_SPAWN_LIN_VELOCITY..ASTEROID_MAX_SPAWN_LIN_VELOCITY), // y
+        rng.gen_range(-ASTEROID_MAX_SPAWN_LIN_VELOCITY..ASTEROID_MAX_SPAWN_LIN_VELOCITY),
+        rng.gen_range(-ASTEROID_MAX_SPAWN_LIN_VELOCITY..ASTEROID_MAX_SPAWN_LIN_VELOCITY),
     );
     let asteroid_angular_velocity =
         rng.gen_range(-ASTEROID_MAX_SPAWN_ANG_VELOCITY..ASTEROID_MAX_SPAWN_ANG_VELOCITY);

@@ -101,7 +101,7 @@ struct Duplicate;
 
 fn duplicate_on_map_edge(
     mut commands: Commands,
-    duplicable_query: Query<
+    mut duplicable_query: Query<
         (
             Entity,
             &GlobalTransform,
@@ -114,80 +114,83 @@ fn duplicate_on_map_edge(
     >,
     bounds: Res<Bounds>,
 ) {
-    for (entity, transform, collider, mesh_handle, material_handle, opt_original) in
-        duplicable_query.iter()
+    for (entity, transform, collider, mesh_handle, material_handle, mut opt_original) in
+        duplicable_query.iter_mut()
     {
-        let positions = edge_positions(transform, collider, &bounds);
+        let mut spawn_duplicates = |original: &mut Original| {
+            if original.duplicate_x.is_some()
+                && original.duplicate_y.is_some()
+                && original.duplicate_xy.is_some()
+            {
+                return;
+            }
 
-        let mut original = if let Some(original) = opt_original {
-            original.clone()
-        } else {
-            Original {
-                duplicate_x: None,
-                duplicate_y: None,
-                duplicate_xy: None,
+            let positions = edge_positions(transform, collider, &bounds);
+
+            let intersects_y = positions.top == Position::Intersecting
+                || positions.bottom == Position::Intersecting;
+            let intersects_x = positions.left == Position::Intersecting
+                || positions.right == Position::Intersecting;
+
+            if intersects_y && original.duplicate_y.is_none() {
+                let offset_y = bounds.0.y * 2. - transform.translation().y.signum();
+                let duplicate_y = spawn_duplicate(
+                    &mut commands,
+                    transform,
+                    &mesh_handle,
+                    &material_handle,
+                    collider,
+                    Vec3::new(0.0, offset_y, 0.0),
+                );
+                original.duplicate_y = Some(duplicate_y);
+                info!("Spawning duplicate y for entity {:?}", entity);
+            }
+
+            if intersects_x && original.duplicate_x.is_none() {
+                let offset_x = bounds.0.x * 2. * -transform.translation().x.signum();
+                let duplicate_x = spawn_duplicate(
+                    &mut commands,
+                    transform,
+                    &mesh_handle,
+                    &material_handle,
+                    collider,
+                    Vec3::new(offset_x, 0.0, 0.0),
+                );
+                original.duplicate_x = Some(duplicate_x);
+                info!("Spawning duplicate x for entity {:?}", entity);
+            }
+
+            if intersects_y && intersects_x && original.duplicate_xy.is_none() {
+                let offset_xy = Vec2::new(
+                    bounds.0.x * 2. * -transform.translation().x.signum(),
+                    bounds.0.y * 2. * -transform.translation().y.signum(),
+                );
+                let duplicate_xy = spawn_duplicate(
+                    &mut commands,
+                    transform,
+                    &mesh_handle,
+                    &material_handle,
+                    collider,
+                    Vec3::new(offset_xy.x, offset_xy.y, 0.0),
+                );
+                original.duplicate_xy = Some(duplicate_xy);
+                info!("Spawning duplicate xy for entity {:?}", entity);
             }
         };
 
-        let intersects_y =
-            positions.top == Position::Intersecting || positions.bottom == Position::Intersecting;
-        let intersects_x =
-            positions.left == Position::Intersecting || positions.right == Position::Intersecting;
+        if let Some(original) = opt_original.as_mut() {
+            spawn_duplicates(original);
+        } else {
+            let mut original = Original {
+                duplicate_x: None,
+                duplicate_y: None,
+                duplicate_xy: None,
+            };
 
-        if intersects_y && opt_original.map_or(true, |original| original.duplicate_y.is_none()) {
-            let offset_y = bounds.0.y * 2. - transform.translation().y.signum();
-            let duplicate_y = spawn_duplicate(
-                &mut commands,
-                transform,
-                mesh_handle,
-                material_handle,
-                collider,
-                Vec3::new(0.0, offset_y, 0.0),
-            );
-            original.duplicate_y = Some(duplicate_y);
-            info!("Spawning duplicate y for entity {:?}", entity);
-        }
+            spawn_duplicates(&mut original);
 
-        if intersects_x && opt_original.map_or(true, |original| original.duplicate_x.is_none()) {
-            let offset_x = bounds.0.x * 2. * -transform.translation().x.signum();
-            let duplicate_x = spawn_duplicate(
-                &mut commands,
-                transform,
-                mesh_handle,
-                material_handle,
-                collider,
-                Vec3::new(offset_x, 0.0, 0.0),
-            );
-            original.duplicate_x = Some(duplicate_x);
-            info!("Spawning duplicate x for entity {:?}", entity);
-        }
-
-        if intersects_y
-            && intersects_x
-            && opt_original.map_or(true, |original| original.duplicate_xy.is_none())
-        {
-            let offset_xy = Vec2::new(
-                bounds.0.x * 2. * -transform.translation().x.signum(),
-                bounds.0.y * 2. * -transform.translation().y.signum(),
-            );
-            let duplicate_xy = spawn_duplicate(
-                &mut commands,
-                transform,
-                mesh_handle,
-                material_handle,
-                collider,
-                Vec3::new(offset_xy.x, offset_xy.y, 0.0),
-            );
-            original.duplicate_xy = Some(duplicate_xy);
-            info!("Spawning duplicate xy for entity {:?}", entity);
-        }
-
-        if original.duplicate_x.is_some()
-            || original.duplicate_y.is_some()
-            || original.duplicate_xy.is_some()
-        {
             commands.entity(entity).insert(original);
-        }
+        };
     }
 }
 

@@ -30,10 +30,10 @@ use crate::{
 #[derive(Component)]
 pub struct Asteroid;
 
-const ASTEROID_SPAWN_COUNT: usize = 20;
-const ASTEROID_MAX_VERTICE_DRIFT: f32 = 10.;
-const ASTEROID_MAX_SPAWN_LIN_VELOCITY: f32 = 50.;
-const ASTEROID_MAX_SPAWN_ANG_VELOCITY: f32 = 1.;
+pub const ASTEROID_SPAWN_COUNT: usize = 10;
+pub const ASTEROID_MAX_VERTICE_DRIFT: f32 = 10.;
+pub const ASTEROID_MAX_SPAWN_LIN_VELOCITY: f32 = 50.;
+pub const ASTEROID_MAX_SPAWN_ANG_VELOCITY: f32 = 1.;
 
 pub fn spawn_asteroids(
     mut commands: Commands,
@@ -73,7 +73,7 @@ pub fn spawn_asteroids(
     }
 }
 
-fn spawn_asteroid(
+pub fn spawn_asteroid(
     mut rng: rand::prelude::ThreadRng,
     commands: &mut Commands,
     asteroid_pos: Vec2,

@@ -2,6 +2,7 @@ use bevy::{
     app::{App, Plugin, Update},
     ecs::{
         entity::Entity,
+        event::EventWriter,
         query::With,
         schedule::{
             apply_deferred,
@@ -19,6 +20,7 @@ use bevy::{
 
 use crate::{
     ship::{Ship, Throttling},
+    turret::FireEvent,
     GameState, Player,
 };
 
@@ -48,6 +50,7 @@ pub fn player_ship_input(
     mouse_input: Res<ButtonInput<MouseButton>>,
     mut player_query: Query<(Entity, &GlobalTransform, &mut Transform), (With<Player>, With<Ship>)>,
     camera_query: Query<(&Camera, &GlobalTransform)>,
+    mut fire_projectile_event_writer: EventWriter<FireEvent>,
     windows: Query<&Window>,
 ) {
     let (camera, camera_global_transform) = camera_query.single();
@@ -74,6 +77,14 @@ pub fn player_ship_input(
         let target_rotation = Quat::from_rotation_z(angle - std::f32::consts::FRAC_PI_2);
 
         player_transform.rotation = target_rotation;
+
+        let fire_projectile = mouse_input.pressed(MouseButton::Right);
+
+        if fire_projectile {
+            fire_projectile_event_writer.send(FireEvent {
+                turret_entity: player_entity,
+            });
+        }
     }
 }
 

@@ -12,7 +12,7 @@ use bevy::{
     },
     gizmos::gizmos::Gizmos,
     hierarchy::DespawnRecursiveExt,
-    log::info,
+    log::debug,
     math::{Quat, Vec2, Vec3, Vec3Swizzles},
     render::color::Color,
     sprite::{ColorMaterial, MaterialMesh2dBundle, Mesh2dHandle},
@@ -143,7 +143,7 @@ fn duplicate_on_map_edge(
                     Vec3::new(0.0, offset_y, 0.0),
                 );
                 original.duplicate_y = Some(duplicate_y);
-                info!("Spawning duplicate y for entity {:?}", entity);
+                debug!("Spawning duplicate y for entity {:?}", entity);
             }
 
             if intersects_x && original.duplicate_x.is_none() {
@@ -157,7 +157,7 @@ fn duplicate_on_map_edge(
                     Vec3::new(offset_x, 0.0, 0.0),
                 );
                 original.duplicate_x = Some(duplicate_x);
-                info!("Spawning duplicate x for entity {:?}", entity);
+                debug!("Spawning duplicate x for entity {:?}", entity);
             }
 
             if intersects_y && intersects_x && original.duplicate_xy.is_none() {
@@ -174,7 +174,7 @@ fn duplicate_on_map_edge(
                     Vec3::new(offset_xy.x, offset_xy.y, 0.0),
                 );
                 original.duplicate_xy = Some(duplicate_xy);
-                info!("Spawning duplicate xy for entity {:?}", entity);
+                debug!("Spawning duplicate xy for entity {:?}", entity);
             }
         };
 
@@ -343,7 +343,7 @@ fn teleport_original_to_swap(
                 commands.entity(duplicate).despawn_recursive();
             }
 
-            info!("Removing duplicates of entity {:?}", original_entity);
+            debug!("Removing duplicates of entity {:?}", original_entity);
         };
 
         let edge_positions = edge_positions(global_transform, collider, &bounds);
@@ -362,7 +362,7 @@ fn teleport_original_to_swap(
         let mut teleport_to_duplicate = |offset: Vec2| {
             transform.translation += Vec3::new(offset.x, offset.y, 0.0);
 
-            info!(
+            debug!(
                 "Teleporting entity {:?} to {:?}",
                 original_entity, transform.translation
             );

@@ -5,7 +5,12 @@ authors = ["Simon Voordouw <simonvoordouw@gmail.com>"]
 edition = "2021"
 
 [dependencies]
+assert_approx_eq = "1.1.0"
 bevy = { version="0.13", features=["wayland"] }
 bevy_rapier2d = { version = "0.26.0", features = ["wasm-bindgen"] }
 itertools = "0.12.1"
 rand = "0.8.5"
+
+[dev-dependencies]
+assert_approx_eq = "1.1.0"
+proptest = "1.4.0"

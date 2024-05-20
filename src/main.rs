@@ -18,7 +18,7 @@ use bevy::{
 };
 use bevy_rapier2d::{
     dynamics::{RigidBody, Sleeping, Velocity},
-    geometry::{ActiveEvents, Restitution},
+    geometry::{ActiveEvents, ColliderDisabled, Restitution},
     na::ComplexField,
     prelude::{CollisionEvent, NoUserData, RapierConfiguration, RapierPhysicsPlugin},
     render::RapierDebugRenderPlugin,
@@ -30,7 +30,7 @@ use mesh_utils::{calculate_mesh_area, distance_to_plane, get_intersection_points
 use player::{despawn_player, spawn_player, Player};
 use rand::{rngs::ThreadRng, Rng};
 use ship::ship_movement;
-use split_mesh::split_mesh;
+use split_mesh::{shatter_mesh, split_mesh};
 use turret::{fire_projectile, reload, FireEvent, Projectile};
 use utils::mesh_to_collider;
 
@@ -70,7 +70,7 @@ fn main() {
                 fire_projectile,
                 projectile_asteroid_collision,
                 apply_deferred,
-                split_long_skinny_asteroids,
+                debris_lifetime,
             )
                 .chain()
                 .after(PlayerInputSet),
@@ -112,14 +112,19 @@ fn player_asteroid_collision(
     }
 }
 
+#[derive(Component)]
+struct Debris {
+    lifetime: Timer,
+}
+
 fn split_asteroid(
     commands: &mut Commands,
     original_mesh: &Handle<Mesh>,
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<ColorMaterial>>,
     transform: &Transform,
+    velocity: Velocity,
     collision_direction: Vec2,
-    rng: &mut ThreadRng,
 ) {
     let mesh = meshes.get(original_mesh).expect("Original mesh not found");
 
@@ -132,164 +137,57 @@ fn split_asteroid(
         .truncate()
         .normalize();
 
-    let [(mesh_a, local_offset_a), (mesh_b, local_offset_b)] =
-        split_mesh(mesh, mesh_collision_direction);
-
-    let [offset_a, offset_b] = [local_offset_a, local_offset_b];
+    let [(mesh_a, offset_a), (mesh_b, offset_b)] = split_mesh(mesh, mesh_collision_direction);
 
     let min_area = 500.;
 
     // Calculate area of the split mesh
     // Skip spawning if the area of the split mesh is too small
 
-    if calculate_mesh_area(&mesh_a) > min_area {
-        let translation = transform.transform_point(offset_a.extend(0.));
-        let transform_a =
-            Transform::from_translation(translation).with_rotation(transform.rotation);
+    let mut rng = ThreadRng::default();
 
-        // Spawn new asteroid entities
-        spawn_asteroid_split(rng, commands, transform_a, meshes, materials, &mesh_a);
-    }
+    let mut spawn = |mesh: &Mesh, offset: Vec2| {
+        let translation = transform.transform_point(offset.extend(0.));
+        let transform = Transform::from_translation(translation).with_rotation(transform.rotation);
+        if calculate_mesh_area(mesh) > min_area {
+            spawn_asteroid_split(commands, transform, velocity, meshes, materials, mesh);
+        } else {
+            let shards = shatter_mesh(mesh, 2);
+            for (mesh, offset) in shards.iter() {
+                let shard_translation = transform.transform_point(offset.extend(0.));
+                let shard_transform = Transform::from_translation(shard_translation)
+                    .with_rotation(transform.rotation);
 
-    if calculate_mesh_area(&mesh_b) > min_area {
-        let translation = transform.transform_point(offset_b.extend(0.));
-        let transform_b =
-            Transform::from_translation(translation).with_rotation(transform.rotation);
+                let velocity = Velocity {
+                    linvel: transform
+                        .rotation
+                        .mul_vec3(offset.extend(0.))
+                        .normalize()
+                        .xy()
+                        * 15.
+                        + velocity.linvel,
+                    angvel: rng.gen_range(
+                        -ASTEROID_MAX_SPAWN_ANG_VELOCITY..ASTEROID_MAX_SPAWN_ANG_VELOCITY,
+                    ),
+                };
 
-        spawn_asteroid_split(rng, commands, transform_b, meshes, materials, &mesh_b);
-    }
-}
-
-fn split_long_skinny_asteroids(
-    mut commands: Commands,
-    asteroid_query: Query<(Entity, &Transform, &mut Mesh2dHandle), With<Asteroid>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
-) {
-    // Split asteroids if their aspect ratio is too high
-    for (asteroid_entity, transform, mesh_handle) in &mut asteroid_query.iter() {
-        let mesh = meshes.get(&mesh_handle.0).unwrap();
-        let (normal, aspect_ratio) = mesh_aspect_ratio(mesh);
-
-        if aspect_ratio > 6.0 {
-            split_asteroid(
-                &mut commands,
-                &mesh_handle.0,
-                &mut meshes,
-                &mut materials,
-                transform,
-                normal,
-                &mut rand::thread_rng(),
-            );
-            commands.entity(asteroid_entity).despawn();
-        }
-    }
-}
-
-fn mesh_aspect_ratio(mesh: &Mesh) -> (Vec2, f32) {
-    let vertices = mesh
-        .attribute(Mesh::ATTRIBUTE_POSITION)
-        .unwrap()
-        .as_float3()
-        .unwrap();
-    // Find the longest line segment through the center of the asteroid
-    // Assume the asteroid is convex
-    let mut max_length = 0.;
-    let mut max_length_indices = (0, 0);
-    for (i, vertex) in vertices.iter().enumerate() {
-        let vertex = Vec2::new(vertex[0], vertex[1]);
-        for (j, other_vertex) in vertices[i + 1..].iter().enumerate() {
-            let other_vertex = Vec2::new(other_vertex[0], other_vertex[1]);
-
-            let length = (vertex - other_vertex).length();
-            if length > max_length {
-                max_length = length;
-                max_length_indices = (i, i + j + 1);
+                spawn_debris(commands, shard_transform, velocity, meshes, materials, mesh)
             }
         }
-    }
+    };
 
-    let indices = mesh.indices().unwrap();
-
-    let (i, j) = max_length_indices;
-    let vertex_a = Vec2::new(vertices[i][0], vertices[i][1]);
-    let vertex_b = Vec2::new(vertices[j][0], vertices[j][1]);
-    let direction = (vertex_b - vertex_a).normalize();
-
-    let normal = Vec2::new(-direction.y, direction.x);
-
-    let normal_plane = Plane2d::new(*Direction2d::new(direction).unwrap());
-
-    let mesh_center = vertices
-        .iter()
-        .fold(Vec2::ZERO, |acc, v| acc + Vec2::new(v[0], v[1]))
-        / vertices.len() as f32;
-
-    // Calculate the max distance to the longest line segment
-    // For every edge of the asteroid, calculate the projection of the edge onto the normal
-    // and find the maximum projection.
-    let mut width = 0.0;
-    for chunk in &indices.iter().chunks(3) {
-        let mut side_a = Vec::new();
-        let mut side_b = Vec::new();
-
-        for index in chunk {
-            let vertex = Vec2::new(vertices[index][0], vertices[index][1]);
-            if distance_to_plane(vertex, normal_plane, Vec2::ZERO) > 0.0 {
-                side_a.push(index);
-            } else {
-                side_b.push(index);
-            }
-        }
-
-        match (side_a.len(), side_b.len()) {
-            (1, 2) => {
-                let intersections = get_intersection_points_2d(
-                    &normal_plane,
-                    vertices,
-                    side_a[0],
-                    &side_b,
-                    mesh_center,
-                );
-
-                let distance = (intersections[0] - intersections[1]).length().abs();
-                width += distance;
-            }
-            (2, 1) => {
-                let intersections = get_intersection_points_2d(
-                    &normal_plane,
-                    vertices,
-                    side_b[0],
-                    &side_a,
-                    mesh_center,
-                );
-
-                let distance = (intersections[0] - intersections[1]).length().abs();
-                width += distance;
-            }
-            _ => {}
-        }
-    }
-
-    let aspect_ratio = max_length / width;
-    (normal, aspect_ratio)
+    spawn(&mesh_a, offset_a);
+    spawn(&mesh_b, offset_b);
 }
 
 fn spawn_asteroid_split(
-    rng: &mut ThreadRng,
     commands: &mut Commands,
     transform: Transform,
+    velocity: Velocity,
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<ColorMaterial>>,
     mesh: &Mesh,
 ) {
-    let asteroid_velocity = Vec2::new(
-        rng.gen_range(-ASTEROID_MAX_SPAWN_LIN_VELOCITY..ASTEROID_MAX_SPAWN_LIN_VELOCITY),
-        rng.gen_range(-ASTEROID_MAX_SPAWN_LIN_VELOCITY..ASTEROID_MAX_SPAWN_LIN_VELOCITY),
-    );
-    let asteroid_angular_velocity =
-        rng.gen_range(-ASTEROID_MAX_SPAWN_ANG_VELOCITY..ASTEROID_MAX_SPAWN_ANG_VELOCITY);
-
     let collider = mesh_to_collider(mesh);
 
     let mut asteroid_cmd = commands.spawn((
@@ -307,10 +205,7 @@ fn spawn_asteroid_split(
     if !FROZEN_ASTEROIDS {
         asteroid_cmd.insert((
             RigidBody::Dynamic,
-            Velocity {
-                linvel: asteroid_velocity,
-                angvel: asteroid_angular_velocity,
-            },
+            velocity,
             Restitution {
                 coefficient: 0.9,
                 ..default()
@@ -326,16 +221,71 @@ fn spawn_asteroid_split(
     }
 }
 
+fn spawn_debris(
+    commands: &mut Commands,
+    transform: Transform,
+    velocity: Velocity,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<ColorMaterial>>,
+    mesh: &Mesh,
+) {
+    let collider = mesh_to_collider(mesh);
+
+    let mut asteroid_cmd = commands.spawn((
+        Debris {
+            lifetime: Timer::from_seconds(3.0, TimerMode::Once),
+        },
+        MaterialMesh2dBundle {
+            transform,
+            mesh: Mesh2dHandle(meshes.add(mesh.clone())),
+            material: materials.add(ColorMaterial::from(Color::WHITE)),
+            ..default()
+        },
+        collider,
+        Duplicable,
+        ColliderDisabled,
+    ));
+    if !FROZEN_ASTEROIDS {
+        asteroid_cmd.insert((
+            RigidBody::Dynamic,
+            velocity,
+            Restitution {
+                coefficient: 0.9,
+                ..default()
+            },
+            Sleeping {
+                normalized_linear_threshold: 0.001,
+                angular_threshold: 0.001,
+                ..default()
+            },
+        ));
+    } else {
+        asteroid_cmd.insert(RigidBody::Fixed);
+    }
+}
+
+fn debris_lifetime(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut debris_query: Query<(Entity, &mut Debris)>,
+) {
+    for (entity, mut debris) in &mut debris_query {
+        debris.lifetime.tick(time.delta());
+        if debris.lifetime.finished() {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
 fn projectile_asteroid_collision(
     mut commands: Commands,
     mut collision_events: EventReader<CollisionEvent>,
     projectile_query: Query<&Projectile>,
-    mut asteroid_query: Query<(&Transform, &mut Mesh2dHandle), With<Asteroid>>,
+    mut asteroid_query: Query<(&Transform, &mut Mesh2dHandle, &Velocity), With<Asteroid>>,
     transform_query: Query<&Transform>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
-    let mut rng = rand::thread_rng();
     for event in collision_events.read() {
         if let CollisionEvent::Started(entity_a, entity_b, _) = event {
             let (projectile_entity, asteroid_entity) = if projectile_query.contains(*entity_a)
@@ -353,15 +303,16 @@ fn projectile_asteroid_collision(
 
             commands.entity(projectile_entity).despawn();
             // Split asteroid into smaller asteroids
-            if let Ok((transform, mesh_handle)) = asteroid_query.get_mut(asteroid_entity) {
+            if let Ok((transform, mesh_handle, velocity)) = asteroid_query.get_mut(asteroid_entity)
+            {
                 split_asteroid(
                     &mut commands,
                     &mesh_handle.0,
                     &mut meshes,
                     &mut materials,
                     transform,
+                    *velocity,
                     collision_direction.xy().normalize(),
-                    &mut rng,
                 );
                 commands.entity(asteroid_entity).despawn();
             }
@@ -422,27 +373,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_mesh_aspect_ratio_triangle() {
-        let vertices = vec![[0.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 2.0, 0.0]];
-
-        let indices = vec![0, 1, 2];
-
-        let mut mesh = Mesh::new(
-            PrimitiveTopology::TriangleList,
-            RenderAssetUsages::RENDER_WORLD,
-        );
-
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vertices);
-        mesh.insert_indices(Indices::U32(indices));
-
-        let (normal, aspect_ratio) = mesh_aspect_ratio(&mesh);
-
-        assert_eq!(normal, Vec2::new(-1., 0.));
-
-        assert_eq!(aspect_ratio, 2.0);
-    }
-
-    #[test]
     fn test_split_asteroid_rectangle() {
         let mut app = App::new();
 
@@ -461,16 +391,14 @@ mod tests {
 
                 let transform = Transform::default();
 
-                let mut rng = rand::thread_rng();
-
                 split_asteroid(
                     &mut commands,
                     &mesh_handle,
                     &mut meshes,
                     &mut materials,
                     &transform,
+                    Velocity::zero(),
                     Vec2::new(0., 1.),
-                    &mut rng,
                 );
             },
         );
@@ -512,16 +440,14 @@ mod tests {
                 let transform =
                     Transform::from_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2));
 
-                let mut rng = rand::thread_rng();
-
                 split_asteroid(
                     &mut commands,
                     &mesh_handle,
                     &mut meshes,
                     &mut materials,
                     &transform,
+                    Velocity::zero(),
                     Vec2::new(0., 1.),
-                    &mut rng,
                 );
             },
         );

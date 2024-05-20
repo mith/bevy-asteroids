@@ -6,6 +6,7 @@ use bevy::{
     },
     utils::HashSet,
 };
+use bevy_rapier2d::na::vector;
 use itertools::Itertools;
 
 use crate::mesh_utils::{distance_to_plane, ensure_ccw, get_intersection_points_2d};
@@ -84,6 +85,44 @@ pub fn split_mesh(mesh: &Mesh, split_plane_direction: Vec2) -> [(Mesh, Vec2); 2]
         let mesh = create_mesh_2d(&cleaned_vertices, &cleaned_indices);
         (mesh, offset)
     })
+}
+
+pub fn shatter_mesh(mesh: &Mesh, num_shards: usize) -> Vec<(Mesh, Vec2)> {
+    recursive_split(mesh, Vec2::new(0., 1.), Vec2::ZERO, 6)
+}
+
+fn recursive_split(
+    mesh: &Mesh,
+    direction: Vec2,
+    offset: Vec2,
+    splits_left: u32,
+) -> Vec<(Mesh, Vec2)> {
+    let [(mesh_a, offset_a), (mesh_b, offset_b)] = split_mesh(mesh, direction);
+
+    let global_offset_a = offset + offset_a;
+    let global_offset_b = offset + offset_b;
+
+    let splits_left = splits_left - 1;
+
+    if splits_left == 0 {
+        vec![(mesh_a, global_offset_a), (mesh_b, global_offset_b)]
+    } else {
+        let direction = Vec2::new(-direction.y, direction.x);
+        let mut shards = Vec::new();
+        shards.extend(recursive_split(
+            &mesh_a,
+            direction,
+            global_offset_a,
+            splits_left,
+        ));
+        shards.extend(recursive_split(
+            &mesh_b,
+            -direction,
+            global_offset_b,
+            splits_left,
+        ));
+        shards
+    }
 }
 
 fn split_triangle(

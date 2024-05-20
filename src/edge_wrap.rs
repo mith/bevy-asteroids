@@ -5,6 +5,7 @@ use bevy::{
         component::Component,
         entity::Entity,
         query::With,
+        removal_detection::RemovedComponents,
         schedule::{
             apply_deferred, common_conditions::resource_exists, IntoSystemConfigs, SystemSet,
         },
@@ -39,6 +40,8 @@ impl Plugin for EdgeWrapPlugin {
             .add_systems(
                 Update,
                 (
+                    duplicable_removed,
+                    apply_deferred,
                     duplicate_on_map_edge,
                     apply_deferred,
                     sync_duplicate_transforms,
@@ -97,7 +100,9 @@ struct Original {
 }
 
 #[derive(Component, Debug)]
-struct Duplicate;
+struct Duplicate {
+    original: Entity,
+}
 
 fn duplicate_on_map_edge(
     mut commands: Commands,
@@ -141,6 +146,7 @@ fn duplicate_on_map_edge(
                     &material_handle,
                     collider,
                     Vec3::new(0.0, offset_y, 0.0),
+                    entity,
                 );
                 original.duplicate_y = Some(duplicate_y);
                 debug!("Spawning duplicate y for entity {:?}", entity);
@@ -155,6 +161,7 @@ fn duplicate_on_map_edge(
                     &material_handle,
                     collider,
                     Vec3::new(offset_x, 0.0, 0.0),
+                    entity,
                 );
                 original.duplicate_x = Some(duplicate_x);
                 debug!("Spawning duplicate x for entity {:?}", entity);
@@ -172,6 +179,7 @@ fn duplicate_on_map_edge(
                     &material_handle,
                     collider,
                     Vec3::new(offset_xy.x, offset_xy.y, 0.0),
+                    entity,
                 );
                 original.duplicate_xy = Some(duplicate_xy);
                 debug!("Spawning duplicate xy for entity {:?}", entity);
@@ -201,10 +209,11 @@ fn spawn_duplicate(
     material_handle: &Handle<ColorMaterial>,
     collider: &Collider,
     offset: Vec3,
+    original: Entity,
 ) -> Entity {
     commands
         .spawn((
-            Duplicate,
+            Duplicate { original },
             MaterialMesh2dBundle {
                 mesh: mesh_handle.clone(),
                 material: material_handle.clone(),
@@ -399,6 +408,21 @@ fn teleport_original_to_swap(
             let offset = Vec2::new(bounds.0.x * 2. * -original_pos.x.signum(), 0.);
 
             teleport_to_duplicate(offset);
+        }
+    }
+}
+
+fn duplicable_removed(
+    mut commands: Commands,
+    mut removed: RemovedComponents<Duplicable>,
+    duplicate_query: Query<(Entity, &Duplicate)>,
+) {
+    for entity in removed.read() {
+        for (duplicate_entity, duplicate) in &duplicate_query {
+            if duplicate.original == entity {
+                debug!("Removing duplicate entity {:?}", duplicate_entity);
+                commands.entity(duplicate_entity).despawn_recursive();
+            }
         }
     }
 }

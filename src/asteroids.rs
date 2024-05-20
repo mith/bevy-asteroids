@@ -7,7 +7,10 @@ use bevy::{
         system::{Commands, Query, Res, ResMut},
     },
     hierarchy::DespawnRecursiveExt,
-    math::{primitives::RegularPolygon, Vec2, Vec3},
+    math::{
+        primitives::{Rectangle, RegularPolygon},
+        Vec2, Vec3,
+    },
     render::{
         color::Color,
         mesh::{Mesh, VertexAttributeValues},
@@ -34,6 +37,9 @@ pub const ASTEROID_SPAWN_COUNT: usize = 10;
 pub const ASTEROID_MAX_VERTICE_DRIFT: f32 = 10.;
 pub const ASTEROID_MAX_SPAWN_LIN_VELOCITY: f32 = 50.;
 pub const ASTEROID_MAX_SPAWN_ANG_VELOCITY: f32 = 1.;
+
+pub const RECTANGULAR_ASTEROIDS: bool = false;
+pub const FROZEN_ASTEROIDS: bool = false;
 
 pub fn spawn_asteroids(
     mut commands: Commands,
@@ -87,26 +93,31 @@ pub fn spawn_asteroid(
     let asteroid_angular_velocity =
         rng.gen_range(-ASTEROID_MAX_SPAWN_ANG_VELOCITY..ASTEROID_MAX_SPAWN_ANG_VELOCITY);
 
-    let asteroid_shape = RegularPolygon::new(50., 10);
-    let mut asteroid_mesh = Mesh::from(asteroid_shape);
-
-    let pos_attributes = asteroid_mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION).expect(
-        "Mesh does not have a position attribute. This should not happen as we just created the mesh",
-    );
-
-    let VertexAttributeValues::Float32x3(pos_attr_vec3) = pos_attributes else {
-        panic!("Position attribute is not a Float32x3");
+    let mut asteroid_mesh = if !RECTANGULAR_ASTEROIDS {
+        Mesh::from(RegularPolygon::new(50., 10))
+    } else {
+        Mesh::from(Rectangle::new(100., 100.))
     };
 
-    pos_attr_vec3.iter_mut().for_each(|v| {
-        // Translate vertice randomly
-        v[0] += rng.gen_range(-ASTEROID_MAX_VERTICE_DRIFT..ASTEROID_MAX_VERTICE_DRIFT);
-        v[1] += rng.gen_range(-ASTEROID_MAX_VERTICE_DRIFT..ASTEROID_MAX_VERTICE_DRIFT);
-    });
+    if !RECTANGULAR_ASTEROIDS {
+        let pos_attributes = asteroid_mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION).expect(
+        "Mesh does not have a position attribute. This should not happen as we just created the mesh",
+        );
+
+        let VertexAttributeValues::Float32x3(pos_attr_vec3) = pos_attributes else {
+            panic!("Position attribute is not a Float32x3");
+        };
+
+        pos_attr_vec3.iter_mut().for_each(|v| {
+            // Translate vertice randomly
+            v[0] += rng.gen_range(-ASTEROID_MAX_VERTICE_DRIFT..ASTEROID_MAX_VERTICE_DRIFT);
+            v[1] += rng.gen_range(-ASTEROID_MAX_VERTICE_DRIFT..ASTEROID_MAX_VERTICE_DRIFT);
+        });
+    }
 
     let collider = mesh_to_collider(&asteroid_mesh);
 
-    commands.spawn((
+    let mut asteroid_cmd = commands.spawn((
         Asteroid,
         MaterialMesh2dBundle {
             transform: Transform::default().with_translation(Vec3::new(
@@ -118,24 +129,31 @@ pub fn spawn_asteroid(
             material: materials.add(ColorMaterial::from(Color::WHITE)),
             ..default()
         },
-        RigidBody::Dynamic,
         collider,
-        Velocity {
-            linvel: asteroid_velocity,
-            angvel: asteroid_angular_velocity,
-        },
-        Restitution {
-            coefficient: 0.9,
-            ..default()
-        },
-        Sleeping {
-            normalized_linear_threshold: 0.001,
-            angular_threshold: 0.001,
-            ..default()
-        },
         ActiveEvents::COLLISION_EVENTS,
         Duplicable,
     ));
+
+    if !FROZEN_ASTEROIDS {
+        asteroid_cmd.insert((
+            RigidBody::Dynamic,
+            Velocity {
+                linvel: asteroid_velocity,
+                angvel: asteroid_angular_velocity,
+            },
+            Restitution {
+                coefficient: 0.9,
+                ..default()
+            },
+            Sleeping {
+                normalized_linear_threshold: 0.001,
+                angular_threshold: 0.001,
+                ..default()
+            },
+        ));
+    } else {
+        asteroid_cmd.insert(RigidBody::Fixed);
+    }
 }
 
 pub fn despawn_asteroids(

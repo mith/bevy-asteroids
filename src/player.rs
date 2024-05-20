@@ -8,7 +8,10 @@ use bevy::{
         system::{Commands, Query, ResMut},
     },
     hierarchy::{BuildChildren, DespawnRecursiveExt},
-    math::{primitives::RegularPolygon, Vec3},
+    math::{
+        primitives::{RegularPolygon, Triangle2d},
+        Vec2, Vec3,
+    },
     render::{color::Color, mesh::Mesh, view::Visibility},
     sprite::{ColorMaterial, MaterialMesh2dBundle},
     transform::components::Transform,
@@ -44,7 +47,7 @@ fn spawn_player_ship(
     materials: &mut Assets<ColorMaterial>,
     transform: Transform,
 ) {
-    let player_shape = RegularPolygon::new(10., 3);
+    let player_shape = Triangle2d::new(Vec2::new(0., 12.), Vec2::new(-8., -8.), Vec2::new(8., -8.));
 
     let player_mesh = Mesh::from(player_shape);
     let collider = mesh_to_collider(&player_mesh);
@@ -68,7 +71,7 @@ fn spawn_player_ship(
                 Name::new("Thruster"),
                 Thruster,
                 MaterialMesh2dBundle {
-                    transform: Transform::from_translation(Vec3::new(0., -10., 0.)),
+                    transform: Transform::from_translation(Vec3::new(0., -10., -1.)),
                     mesh: meshes.add(Mesh::from(RegularPolygon::new(5., 3))).into(),
                     material: materials.add(ColorMaterial::from(Color::RED)),
                     visibility: Visibility::Hidden,

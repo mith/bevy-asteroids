@@ -7,6 +7,7 @@ use bevy::{
         system::{Commands, Query, Res, ResMut},
     },
     hierarchy::DespawnRecursiveExt,
+    log::info,
     math::{
         primitives::{Rectangle, RegularPolygon},
         Vec2, Vec3,
@@ -33,7 +34,7 @@ use crate::{
 #[derive(Component)]
 pub struct Asteroid;
 
-pub const ASTEROID_SPAWN_COUNT: usize = 10;
+pub const ASTEROID_SPAWN_COUNT: usize = 20;
 pub const ASTEROID_MAX_VERTICE_DRIFT: f32 = 10.;
 pub const ASTEROID_MAX_SPAWN_LIN_VELOCITY: f32 = 50.;
 pub const ASTEROID_MAX_SPAWN_ANG_VELOCITY: f32 = 1.;
@@ -47,6 +48,7 @@ pub fn spawn_asteroids(
     mut materials: ResMut<Assets<ColorMaterial>>,
     bounds: Res<Bounds>,
 ) {
+    info!(bounds= ?bounds, number= ?ASTEROID_SPAWN_COUNT, "Spawning asteroids");
     let mut asteroid_positions: Vec<Vec2> = Vec::new();
     while asteroid_positions.len() < ASTEROID_SPAWN_COUNT {
         let mut rng = rand::thread_rng();

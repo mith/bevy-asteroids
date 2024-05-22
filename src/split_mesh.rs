@@ -1,15 +1,16 @@
 use bevy::{
     prelude::*,
     render::{
-        mesh::{Indices, PrimitiveTopology, VertexAttributeValues},
+        mesh::{Indices, PrimitiveTopology},
         render_asset::RenderAssetUsages,
     },
     utils::HashSet,
 };
-use bevy_rapier2d::na::vector;
 use itertools::Itertools;
 
-use crate::mesh_utils::{distance_to_plane, ensure_ccw, get_intersection_points_2d};
+use crate::mesh_utils::{
+    calculate_mesh_area, distance_to_plane, ensure_ccw, get_intersection_points_2d,
+};
 
 pub fn split_mesh(mesh: &Mesh, split_plane_direction: Vec2) -> [(Mesh, Vec2); 2] {
     let vertices = mesh
@@ -83,46 +84,158 @@ pub fn split_mesh(mesh: &Mesh, split_plane_direction: Vec2) -> [(Mesh, Vec2); 2]
         let offset = recenter_mesh(&mut cleaned_vertices);
 
         let mesh = create_mesh_2d(&cleaned_vertices, &cleaned_indices);
+
         (mesh, offset)
     })
 }
 
-pub fn shatter_mesh(mesh: &Mesh, num_shards: usize) -> Vec<(Mesh, Vec2)> {
-    recursive_split(mesh, Vec2::new(0., 1.), Vec2::ZERO, 6)
+pub fn shatter_mesh(mesh: &Mesh, max_shard_area: f32) -> Vec<(Mesh, Vec2)> {
+    recursive_split(mesh, Vec2::new(0., 1.), Vec2::ZERO, max_shard_area)
 }
 
 fn recursive_split(
     mesh: &Mesh,
     direction: Vec2,
     offset: Vec2,
-    splits_left: u32,
+    max_shard_area: f32,
 ) -> Vec<(Mesh, Vec2)> {
     let [(mesh_a, offset_a), (mesh_b, offset_b)] = split_mesh(mesh, direction);
 
     let global_offset_a = offset + offset_a;
     let global_offset_b = offset + offset_b;
 
-    let splits_left = splits_left - 1;
+    let mut shards = Vec::new();
 
-    if splits_left == 0 {
-        vec![(mesh_a, global_offset_a), (mesh_b, global_offset_b)]
-    } else {
-        let direction = Vec2::new(-direction.y, direction.x);
-        let mut shards = Vec::new();
+    let area_a = calculate_mesh_area(&mesh_a);
+
+    let direction = Vec2::new(-direction.y, direction.x);
+
+    if area_a > max_shard_area {
         shards.extend(recursive_split(
             &mesh_a,
             direction,
             global_offset_a,
-            splits_left,
+            max_shard_area,
         ));
+    } else {
+        shards.push((mesh_a, global_offset_a));
+    }
+
+    let area_b = calculate_mesh_area(&mesh_b);
+
+    if area_b > max_shard_area {
         shards.extend(recursive_split(
             &mesh_b,
-            -direction,
+            direction,
             global_offset_b,
-            splits_left,
+            max_shard_area,
         ));
-        shards
+    } else {
+        shards.push((mesh_b, global_offset_b));
     }
+
+    shards
+}
+
+pub fn round_mesh(mesh: &Mesh) -> (Mesh, Vec<(Mesh, Vec2)>) {
+    let mesh_area = calculate_mesh_area(mesh);
+
+    // Calculate circle radius with same area as the mesh
+    let circle_radius = (mesh_area / std::f32::consts::PI).sqrt();
+
+    // Split the mesh into an inside and outside part
+    let vertices = mesh
+        .attribute(Mesh::ATTRIBUTE_POSITION)
+        .unwrap()
+        .as_float3()
+        .expect("Only Float32x3 positions are supported");
+    let indices = mesh.indices().expect("Mesh must have indices");
+
+    let mut center_indices = Vec::new();
+    let mut center_vertices = vertices.iter().map(|v| Vec2::new(v[0], v[1])).collect();
+
+    let mut outside_indices = Vec::new();
+    let mut outside_vertices = vertices.iter().map(|v| Vec2::new(v[0], v[1])).collect();
+
+    for chunk in &indices.iter().chunks(3) {
+        let mut inside = Vec::new();
+        let mut outside = Vec::new();
+
+        for index in chunk {
+            let vertex = Vec2::new(vertices[index][0], vertices[index][1]);
+            let length = vertex.length();
+            if length < circle_radius {
+                inside.push(index);
+            } else {
+                outside.push(index);
+            }
+        }
+
+        match (inside.len(), outside.len()) {
+            (3, 0) => center_indices.push([inside[0], inside[1], inside[2]]),
+            (0, 3) => outside_indices.push([outside[0], outside[1], outside[2]]),
+            (1, 2) => {
+                let center = vertices_center_f32_3(&[
+                    vertices[inside[0]],
+                    vertices[outside[0]],
+                    vertices[outside[1]],
+                ]);
+
+                let plane_pos = center.normalize() * circle_radius;
+                let plane_normal = Vec2::new(-center.y, center.x).normalize();
+
+                let plane = Plane2d::new(plane_normal);
+
+                split_triangle(
+                    plane,
+                    plane_pos,
+                    vertices,
+                    inside[0],
+                    &outside,
+                    &mut [
+                        (&mut center_indices, &mut center_vertices),
+                        (&mut outside_indices, &mut outside_vertices),
+                    ],
+                );
+            }
+            (2, 1) => {
+                let center = vertices_center_f32_3(&[
+                    vertices[inside[0]],
+                    vertices[inside[1]],
+                    vertices[outside[0]],
+                ]);
+
+                let plane_pos = center.normalize() * circle_radius;
+                let plane_normal = Vec2::new(-center.y, center.x).normalize();
+
+                let plane = Plane2d::new(plane_normal);
+
+                split_triangle(
+                    plane,
+                    plane_pos,
+                    vertices,
+                    outside[0],
+                    &inside,
+                    &mut [
+                        (&mut outside_indices, &mut outside_vertices),
+                        (&mut center_indices, &mut center_vertices),
+                    ],
+                );
+            }
+            _ => {
+                panic!("Invalid split configuration");
+            }
+        }
+    }
+
+    let (mut cleaned_center_vertices, mut cleaned_center_indices) =
+        remove_unused_vertices(&center_vertices, &center_indices);
+
+    deduplicate_vertices(&mut cleaned_center_vertices, &mut cleaned_center_indices);
+
+    let mesh = create_mesh_2d(&cleaned_center_vertices, &cleaned_center_indices);
+
+    (mesh, vec![])
 }
 
 fn split_triangle(
@@ -134,6 +247,8 @@ fn split_triangle(
     target_geometry: &mut [(&mut Vec<[usize; 3]>, &mut Vec<Vec2>); 2],
 ) {
     let intersections = get_intersection_points_2d(&plane, vertices, side_a, side_b, plane_point);
+
+    debug_assert_eq!(intersections.len(), 2);
 
     let [(indices_a, side_a_vertex), (indices_b, side_b_vertex)] = target_geometry;
 
@@ -245,14 +360,27 @@ fn deduplicate_vertices(vertices: &mut Vec<Vec2>, indices: &mut Vec<[usize; 3]>)
     *vertices = unique_vertices;
 }
 
+fn vertices_center_f32_3(vertices: &[[f32; 3]]) -> Vec2 {
+    let (min, max) = vertices.iter().fold(
+        (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY)),
+        |(min, max), vertex| {
+            let vertex = Vec2::new(vertex[0], vertex[1]);
+            (min.min(vertex), max.max(vertex))
+        },
+    );
+    (min + max) / 2.0
+}
+
+fn vertices_center(vertices: &[Vec2]) -> Vec2 {
+    let (min, max) = vertices.iter().fold(
+        (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY)),
+        |(min, max), vertex| (min.min(*vertex), max.max(*vertex)),
+    );
+    (min + max) / 2.0
+}
+
 fn recenter_mesh(vertices: &mut Vec<Vec2>) -> Vec2 {
-    let center = {
-        let (min, max) = vertices.iter().fold(
-            (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY)),
-            |(min, max), vertex| (min.min(*vertex), max.max(*vertex)),
-        );
-        (min + max) / 2.0
-    };
+    let center = vertices_center(vertices);
     for vertex in vertices.iter_mut() {
         *vertex -= center;
     }
@@ -279,7 +407,7 @@ mod tests {
             [1.0, 0.0, 0.0],   // Left of plane
         ];
 
-        let side_a = vec![2];
+        let side_a = [2];
         let side_b = vec![0, 1];
 
         let mut indices_a = vec![];
@@ -377,5 +505,58 @@ mod tests {
         }
 
         assert_approx_eq!(offset_a.x, expected_offset_a.x, 0.0001);
+    }
+
+    #[test]
+    fn test_round_mesh() {
+        // Create a 2x2 rectangle mesh centered around (0, 0)
+        let mut mesh = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        );
+        mesh.insert_attribute(
+            Mesh::ATTRIBUTE_POSITION,
+            vec![
+                [-1.0, -1.0, 0.0],
+                [1.0, -1.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [-1.0, 1.0, 0.0],
+            ],
+        );
+        mesh.insert_indices(Indices::U32(vec![
+            0, 1, 2, // First triangle
+            2, 3, 0, // Second triangle
+        ]));
+
+        let (rounded_mesh, _) = round_mesh(&mesh);
+
+        let vertices = rounded_mesh
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .unwrap()
+            .as_float3()
+            .unwrap();
+
+        let indices = rounded_mesh.indices().unwrap().iter().collect_vec();
+
+        let expected_vertices = [
+            [0.0, 1.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [-1.0, 0.0, 0.0],
+        ];
+
+        let expected_indices = [[0, 1, 2], [0, 2, 3]];
+
+        for (expected, actual) in expected_vertices.iter().zip(vertices) {
+            for (expected, actual) in expected.iter().zip(actual) {
+                assert_approx_eq!(*expected, actual, 0.0001);
+            }
+        }
+
+        for (expected, actual) in expected_indices.iter().zip(indices.chunks(3)) {
+            for (expected, actual) in expected.iter().zip(actual) {
+                assert_eq!(*expected, *actual);
+            }
+        }
     }
 }

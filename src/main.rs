@@ -9,8 +9,7 @@ mod turret;
 mod utils;
 
 use asteroids::{
-    despawn_asteroids, spawn_asteroids, Asteroid, ASTEROID_MAX_SPAWN_ANG_VELOCITY,
-    ASTEROID_MAX_SPAWN_LIN_VELOCITY, FROZEN_ASTEROIDS,
+    despawn_asteroids, spawn_asteroids, Asteroid, ASTEROID_MAX_SPAWN_ANG_VELOCITY, FROZEN_ASTEROIDS,
 };
 use bevy::{
     prelude::*,
@@ -19,19 +18,16 @@ use bevy::{
 use bevy_rapier2d::{
     dynamics::{RigidBody, Sleeping, Velocity},
     geometry::{ActiveEvents, ColliderDisabled, Restitution},
-    na::ComplexField,
     prelude::{CollisionEvent, NoUserData, RapierConfiguration, RapierPhysicsPlugin},
-    render::RapierDebugRenderPlugin,
 };
 use edge_wrap::{Duplicable, EdgeWrapPlugin, EdgeWrapSet};
 use input::{PlayerInputPlugin, PlayerInputSet};
-use itertools::Itertools;
-use mesh_utils::{calculate_mesh_area, distance_to_plane, get_intersection_points_2d};
+use mesh_utils::calculate_mesh_area;
 use player::{despawn_player, spawn_player, Player};
 use rand::{rngs::ThreadRng, Rng};
 use ship::ship_movement;
 use split_mesh::{shatter_mesh, split_mesh};
-use turret::{fire_projectile, reload, FireEvent, Projectile};
+use turret::{fire_projectile, projectile_timer, reload, FireEvent, Projectile};
 use utils::mesh_to_collider;
 
 const PHYSICS_LENGTH_UNIT: f32 = 100.0;
@@ -66,11 +62,13 @@ fn main() {
             Update,
             (
                 reload,
+                projectile_timer,
                 apply_deferred,
                 fire_projectile,
                 projectile_asteroid_collision,
                 apply_deferred,
                 debris_lifetime,
+                asteroids_cleared,
             )
                 .chain()
                 .after(PlayerInputSet),
@@ -96,7 +94,14 @@ enum GameState {
     Finished,
 }
 
+#[derive(Resource)]
+enum GameResult {
+    Win,
+    Lose,
+}
+
 fn player_asteroid_collision(
+    mut commands: Commands,
     mut collision_events: EventReader<CollisionEvent>,
     player_query: Query<Entity, With<Player>>,
     mut next_gamestate: ResMut<NextState<GameState>>,
@@ -106,6 +111,7 @@ fn player_asteroid_collision(
             let player_entity = player_query.single();
             if player_entity == *entity_a || player_entity == *entity_b {
                 info!("Player collided with asteroid");
+                commands.insert_resource(GameResult::Lose);
                 next_gamestate.set(GameState::Finished);
             }
         }
@@ -150,13 +156,16 @@ fn split_asteroid(
         let translation = transform.transform_point(offset.extend(0.));
         let transform = Transform::from_translation(translation).with_rotation(transform.rotation);
         if calculate_mesh_area(mesh) > min_area {
+            // let mesh = round_mesh(mesh).0;
             spawn_asteroid_split(commands, transform, velocity, meshes, materials, mesh);
         } else {
-            let shards = shatter_mesh(mesh, 2);
+            let shards = shatter_mesh(mesh, 8.);
             for (mesh, offset) in shards.iter() {
                 let shard_translation = transform.transform_point(offset.extend(0.));
                 let shard_transform = Transform::from_translation(shard_translation)
                     .with_rotation(transform.rotation);
+
+                let rng_range_max = 5.;
 
                 let velocity = Velocity {
                     linvel: transform
@@ -165,7 +174,11 @@ fn split_asteroid(
                         .normalize()
                         .xy()
                         * 15.
-                        + velocity.linvel,
+                        + velocity.linvel
+                        + Vec2::new(
+                            rng.gen_range(-rng_range_max..rng_range_max),
+                            rng.gen_range(-rng_range_max..rng_range_max),
+                        ),
                     angvel: rng.gen_range(
                         -ASTEROID_MAX_SPAWN_ANG_VELOCITY..ASTEROID_MAX_SPAWN_ANG_VELOCITY,
                     ),
@@ -230,10 +243,11 @@ fn spawn_debris(
     mesh: &Mesh,
 ) {
     let collider = mesh_to_collider(mesh);
+    let mut rng = ThreadRng::default();
 
     let mut asteroid_cmd = commands.spawn((
         Debris {
-            lifetime: Timer::from_seconds(3.0, TimerMode::Once),
+            lifetime: Timer::from_seconds(rng.gen_range(0.5..5.0), TimerMode::Once),
         },
         MaterialMesh2dBundle {
             transform,
@@ -320,12 +334,28 @@ fn projectile_asteroid_collision(
     }
 }
 
+fn asteroids_cleared(
+    mut commands: Commands,
+    asteroid_query: Query<Entity, With<Asteroid>>,
+    mut next_gamestate: ResMut<NextState<GameState>>,
+) {
+    if asteroid_query.iter().count() == 0 {
+        info!("All asteroids cleared");
+        commands.insert_resource(GameResult::Win);
+        next_gamestate.set(GameState::Finished);
+    }
+}
+
 #[derive(Component)]
 struct FinishedText;
 
-const FONT_PATH: &str = "fonts/PublicPixel-z84yD.ttf";
+const FONT_PATH: &str = "fonts/TurretRoad-ExtraLight.ttf";
 
-fn show_game_finished(mut commands: Commands, asset_server: Res<AssetServer>) {
+fn show_game_finished(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    game_result: Res<GameResult>,
+) {
     commands
         .spawn((
             FinishedText,
@@ -346,10 +376,13 @@ fn show_game_finished(mut commands: Commands, asset_server: Res<AssetServer>) {
             parent.spawn((
                 Name::new("Game result text"),
                 TextBundle::from_section(
-                    "Game over",
+                    match *game_result {
+                        GameResult::Win => "You win!",
+                        GameResult::Lose => "Game over!",
+                    },
                     TextStyle {
                         font: asset_server.load(FONT_PATH),
-                        font_size: 30.,
+                        font_size: 90.,
                         color: Color::WHITE,
                     },
                 ),
@@ -365,10 +398,6 @@ fn clear_game_result(mut commands: Commands, finish_text_query: Query<Entity, Wi
 
 #[cfg(test)]
 mod tests {
-    use bevy::render::{
-        mesh::{Indices, PrimitiveTopology},
-        render_asset::RenderAssetUsages,
-    };
 
     use super::*;
 

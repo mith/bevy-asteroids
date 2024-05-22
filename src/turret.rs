@@ -9,7 +9,7 @@ use bevy::{
     math::{primitives::RegularPolygon, Vec2, Vec3, Vec3Swizzles},
     render::{color::Color, mesh::Mesh},
     sprite::{ColorMaterial, MaterialMesh2dBundle},
-    time::{Time, Timer},
+    time::{Time, Timer, TimerMode},
     transform::components::Transform,
     utils::default,
 };
@@ -29,10 +29,7 @@ const RELOAD_DURATION: f32 = 0.3;
 
 impl Default for ReloadTimer {
     fn default() -> Self {
-        Self(Timer::from_seconds(
-            RELOAD_DURATION,
-            bevy::time::TimerMode::Once,
-        ))
+        Self(Timer::from_seconds(RELOAD_DURATION, TimerMode::Once))
     }
 }
 
@@ -48,8 +45,22 @@ pub fn reload(
     }
 }
 
+pub fn projectile_timer(
+    mut commands: Commands,
+    mut query: Query<(Entity, &mut Projectile)>,
+    time: Res<Time>,
+) {
+    for (entity, mut projectile) in query.iter_mut() {
+        if projectile.lifetime.tick(time.delta()).just_finished() {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
 #[derive(Component)]
-pub struct Projectile;
+pub struct Projectile {
+    lifetime: Timer,
+}
 
 pub fn fire_projectile(
     mut commands: Commands,
@@ -89,6 +100,8 @@ pub fn fire_projectile(
     }
 }
 
+pub const PROJECTILE_LIFETIME: f32 = 5.;
+
 fn spawn_projectile(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
@@ -96,12 +109,14 @@ fn spawn_projectile(
     position: Vec2,
     velocity: Vec2,
 ) {
-    let projectile_shape = RegularPolygon::new(5., 3);
+    let projectile_shape = RegularPolygon::new(4., 8);
 
     let projectile_mesh = Mesh::from(projectile_shape);
     let collider = mesh_to_collider(&projectile_mesh);
     commands.spawn((
-        Projectile,
+        Projectile {
+            lifetime: Timer::from_seconds(PROJECTILE_LIFETIME, TimerMode::Once),
+        },
         MaterialMesh2dBundle {
             mesh: meshes.add(projectile_mesh).into(),
             material: materials.add(ColorMaterial::from(Color::WHITE)),

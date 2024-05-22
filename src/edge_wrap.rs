@@ -59,7 +59,7 @@ pub struct EdgeWrapSet;
 #[derive(Resource)]
 pub struct BoundsDebug;
 
-#[derive(Resource)]
+#[derive(Resource, Debug)]
 pub struct Bounds(pub Vec2);
 
 impl Default for Bounds {

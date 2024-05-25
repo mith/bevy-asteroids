@@ -3,11 +3,9 @@ use bevy::{
     core::Name,
     ecs::{
         component::Component,
-        entity::Entity,
-        query::With,
-        system::{Commands, Query, ResMut},
+        system::{Commands, ResMut},
     },
-    hierarchy::{BuildChildren, DespawnRecursiveExt},
+    hierarchy::BuildChildren,
     math::{
         primitives::{RegularPolygon, Triangle2d},
         Vec2, Vec3,
@@ -79,10 +77,4 @@ fn spawn_player_ship(
                 },
             ));
         });
-}
-
-pub fn despawn_player(mut commands: Commands, mut player_query: Query<Entity, With<Player>>) {
-    for player_entity in player_query.iter_mut() {
-        commands.entity(player_entity).despawn_recursive();
-    }
 }

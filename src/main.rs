@@ -8,25 +8,25 @@ mod split_mesh;
 mod turret;
 mod utils;
 
-use asteroids::{
-    despawn_asteroids, spawn_asteroids, Asteroid, ASTEROID_MAX_SPAWN_ANG_VELOCITY, FROZEN_ASTEROIDS,
-};
+use asteroids::{spawn_asteroids, Asteroid, ASTEROID_MAX_SPAWN_ANG_VELOCITY, FROZEN_ASTEROIDS};
 use bevy::{
     prelude::*,
     sprite::{MaterialMesh2dBundle, Mesh2dHandle},
+    window::WindowMode,
 };
 use bevy_rapier2d::{
     dynamics::{RigidBody, Sleeping, Velocity},
     geometry::{ActiveEvents, ColliderDisabled, Restitution},
+    plugin::RapierContext,
     prelude::{CollisionEvent, NoUserData, RapierConfiguration, RapierPhysicsPlugin},
 };
 use edge_wrap::{Duplicable, EdgeWrapPlugin, EdgeWrapSet};
 use input::{PlayerInputPlugin, PlayerInputSet};
 use mesh_utils::calculate_mesh_area;
-use player::{despawn_player, spawn_player, Player};
+use player::{spawn_player, Player};
 use rand::{rngs::ThreadRng, Rng};
 use ship::ship_movement;
-use split_mesh::{shatter_mesh, split_mesh};
+use split_mesh::{shatter_mesh, split_mesh, trim_mesh};
 use turret::{fire_projectile, projectile_timer, reload, FireEvent, Projectile};
 use utils::mesh_to_collider;
 
@@ -39,7 +39,14 @@ fn main() {
     rapier_configuration.gravity = Vec2::new(0., 0.);
 
     app.insert_resource(ClearColor(Color::BLACK))
-        .add_plugins(DefaultPlugins)
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                mode: WindowMode::BorderlessFullscreen,
+                canvas: Some("#game".to_string()),
+                ..default()
+            }),
+            ..default()
+        }))
         .insert_resource(rapier_configuration)
         .add_plugins((
             RapierPhysicsPlugin::<NoUserData>::pixels_per_meter(PHYSICS_LENGTH_UNIT),
@@ -52,7 +59,12 @@ fn main() {
         .add_systems(OnEnter(GameState::Playing), spawn_asteroids)
         .add_systems(
             OnExit(GameState::Finished),
-            (despawn_player, despawn_asteroids),
+            (
+                cleanup::<Player>,
+                cleanup::<Asteroid>,
+                cleanup::<Debris>,
+                cleanup::<Projectile>,
+            ),
         )
         .add_systems(OnEnter(GameState::Finished), show_game_finished)
         .add_systems(OnExit(GameState::Finished), clear_game_result)
@@ -68,7 +80,7 @@ fn main() {
                 projectile_asteroid_collision,
                 apply_deferred,
                 debris_lifetime,
-                asteroids_cleared,
+                asteroids_cleared.run_if(in_state(GameState::Playing)),
             )
                 .chain()
                 .after(PlayerInputSet),
@@ -78,7 +90,8 @@ fn main() {
             (ship_movement, apply_deferred, player_asteroid_collision)
                 .chain()
                 .after(EdgeWrapSet),
-        );
+        )
+        .add_systems(Update, restart_game.run_if(in_state(GameState::Finished)));
 
     app.run();
 }
@@ -103,16 +116,38 @@ enum GameResult {
 fn player_asteroid_collision(
     mut commands: Commands,
     mut collision_events: EventReader<CollisionEvent>,
-    player_query: Query<Entity, With<Player>>,
+    player_query: Query<(Entity, &Transform, Option<&Velocity>, &mut Mesh2dHandle), With<Player>>,
     mut next_gamestate: ResMut<NextState<GameState>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     for event in collision_events.read() {
         if let CollisionEvent::Started(entity_a, entity_b, _) = event {
-            let player_entity = player_query.single();
+            let Some((player_entity, player_transform, player_velocity, player_mesh_handle)) =
+                player_query.get_single().ok()
+            else {
+                return;
+            };
             if player_entity == *entity_a || player_entity == *entity_b {
                 info!("Player collided with asteroid");
                 commands.insert_resource(GameResult::Lose);
                 next_gamestate.set(GameState::Finished);
+
+                let mesh = meshes
+                    .get(&player_mesh_handle.0)
+                    .expect("Player mesh not found")
+                    .clone();
+
+                spawn_shattered_mesh(
+                    &mesh,
+                    player_transform,
+                    player_velocity.copied().unwrap_or_else(Velocity::zero),
+                    &mut commands,
+                    &mut meshes,
+                    &mut materials,
+                );
+
+                commands.entity(player_entity).despawn_recursive();
             }
         }
     }
@@ -131,6 +166,7 @@ fn split_asteroid(
     transform: &Transform,
     velocity: Velocity,
     collision_direction: Vec2,
+    collision_position: Vec2,
 ) {
     let mesh = meshes.get(original_mesh).expect("Original mesh not found");
 
@@ -143,54 +179,98 @@ fn split_asteroid(
         .truncate()
         .normalize();
 
-    let [(mesh_a, offset_a), (mesh_b, offset_b)] = split_mesh(mesh, mesh_collision_direction);
+    let [(mesh_a, offset_a), (mesh_b, offset_b)] =
+        split_mesh(mesh, mesh_collision_direction, collision_position);
 
     let min_area = 500.;
 
     // Calculate area of the split mesh
     // Skip spawning if the area of the split mesh is too small
 
-    let mut rng = ThreadRng::default();
-
     let mut spawn = |mesh: &Mesh, offset: Vec2| {
-        let translation = transform.transform_point(offset.extend(0.));
-        let transform = Transform::from_translation(translation).with_rotation(transform.rotation);
+        // Check if mesh contains any vertices
+        if mesh
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .map(|attr| attr.len() < 3)
+            .unwrap_or(true)
+        {
+            error!("Mesh has no triangles, skipping split");
+            return;
+        }
+        let trimmed = trim_mesh(mesh);
+        let translation = transform.transform_point((offset + trimmed.0 .1).extend(0.));
+        let main_transform =
+            Transform::from_translation(translation).with_rotation(transform.rotation);
+        let velocity = Velocity {
+            linvel: velocity.linvel
+                + asteroid_rotation
+                    .mul_vec3(offset.extend(0.))
+                    .truncate()
+                    .normalize()
+                    * 50.,
+            angvel: velocity.angvel,
+        };
         if calculate_mesh_area(mesh) > min_area {
             // let mesh = round_mesh(mesh).0;
-            spawn_asteroid_split(commands, transform, velocity, meshes, materials, mesh);
+            spawn_asteroid_split(
+                commands,
+                main_transform,
+                velocity,
+                meshes,
+                materials,
+                &trimmed.0 .0,
+            );
         } else {
-            let shards = shatter_mesh(mesh, 8.);
-            for (mesh, offset) in shards.iter() {
-                let shard_translation = transform.transform_point(offset.extend(0.));
-                let shard_transform = Transform::from_translation(shard_translation)
-                    .with_rotation(transform.rotation);
+            spawn_shattered_mesh(mesh, &main_transform, velocity, commands, meshes, materials);
+        }
 
-                let rng_range_max = 5.;
-
-                let velocity = Velocity {
-                    linvel: transform
-                        .rotation
-                        .mul_vec3(offset.extend(0.))
-                        .normalize()
-                        .xy()
-                        * 15.
-                        + velocity.linvel
-                        + Vec2::new(
-                            rng.gen_range(-rng_range_max..rng_range_max),
-                            rng.gen_range(-rng_range_max..rng_range_max),
-                        ),
-                    angvel: rng.gen_range(
-                        -ASTEROID_MAX_SPAWN_ANG_VELOCITY..ASTEROID_MAX_SPAWN_ANG_VELOCITY,
-                    ),
-                };
-
-                spawn_debris(commands, shard_transform, velocity, meshes, materials, mesh)
-            }
+        for (mesh, trimmed_offset) in trimmed.1 {
+            let translation = transform.transform_point((offset + trimmed_offset).extend(0.));
+            let transform =
+                Transform::from_translation(translation).with_rotation(main_transform.rotation);
+            spawn_shattered_mesh(&mesh, &transform, velocity, commands, meshes, materials);
         }
     };
 
     spawn(&mesh_a, offset_a);
     spawn(&mesh_b, offset_b);
+}
+
+fn spawn_shattered_mesh(
+    mesh: &Mesh,
+    transform: &Transform,
+    velocity: Velocity,
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<ColorMaterial>>,
+) {
+    let mut rng = ThreadRng::default();
+    let shards = shatter_mesh(mesh, 12.);
+    for (mesh, offset) in shards.iter() {
+        let shard_translation = transform.transform_point(offset.extend(0.));
+        let shard_transform =
+            Transform::from_translation(shard_translation).with_rotation(transform.rotation);
+
+        let rng_range_max = 5.;
+
+        let velocity = Velocity {
+            linvel: transform
+                .rotation
+                .mul_vec3(offset.extend(0.))
+                .normalize()
+                .xy()
+                * 15.
+                + velocity.linvel
+                + Vec2::new(
+                    rng.gen_range(-rng_range_max..rng_range_max),
+                    rng.gen_range(-rng_range_max..rng_range_max),
+                ),
+            angvel: rng
+                .gen_range(-ASTEROID_MAX_SPAWN_ANG_VELOCITY..ASTEROID_MAX_SPAWN_ANG_VELOCITY),
+        };
+
+        spawn_debris(commands, shard_transform, velocity, meshes, materials, mesh)
+    }
 }
 
 fn spawn_asteroid_split(
@@ -293,10 +373,10 @@ fn debris_lifetime(
 
 fn projectile_asteroid_collision(
     mut commands: Commands,
+    rapier_context: Res<RapierContext>,
     mut collision_events: EventReader<CollisionEvent>,
     projectile_query: Query<&Projectile>,
-    mut asteroid_query: Query<(&Transform, &mut Mesh2dHandle, &Velocity), With<Asteroid>>,
-    transform_query: Query<&Transform>,
+    mut asteroid_query: Query<(&Transform, &mut Mesh2dHandle, Option<&Velocity>), With<Asteroid>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
@@ -312,21 +392,28 @@ fn projectile_asteroid_collision(
                 continue;
             };
 
-            let collision_direction = transform_query.get(projectile_entity).unwrap().translation
-                - transform_query.get(asteroid_entity).unwrap().translation;
-
             commands.entity(projectile_entity).despawn();
             // Split asteroid into smaller asteroids
             if let Ok((transform, mesh_handle, velocity)) = asteroid_query.get_mut(asteroid_entity)
             {
+                let contact = rapier_context
+                    .contact_pair(projectile_entity, asteroid_entity)
+                    .expect("No contact found for projectile-asteroid collision");
+                if !contact.has_any_active_contacts() {
+                    continue;
+                }
+                let (contact_manifold, contact) = contact
+                    .find_deepest_contact()
+                    .expect("No contact point found for projectile-asteroid collision");
                 split_asteroid(
                     &mut commands,
                     &mesh_handle.0,
                     &mut meshes,
                     &mut materials,
                     transform,
-                    *velocity,
-                    collision_direction.xy().normalize(),
+                    velocity.copied().unwrap_or_else(Velocity::zero),
+                    contact_manifold.normal(),
+                    contact.local_p2(),
                 );
                 commands.entity(asteroid_entity).despawn();
             }
@@ -387,7 +474,36 @@ fn show_game_finished(
                     },
                 ),
             ));
+            parent.spawn((
+                Name::new("Restart text"),
+                TextBundle::from_section(
+                    "Press R to restart",
+                    TextStyle {
+                        font: asset_server.load(FONT_PATH),
+                        font_size: 40.,
+                        color: Color::WHITE,
+                    },
+                ),
+            ));
         });
+}
+
+fn restart_game(
+    mut commands: Commands,
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    mut next_gamestate: ResMut<NextState<GameState>>,
+) {
+    if keyboard_input.pressed(KeyCode::KeyR) {
+        commands.remove_resource::<GameResult>();
+        next_gamestate.set(GameState::Playing);
+        info!("Restarting game");
+    }
+}
+
+fn cleanup<T: Component>(mut commands: Commands, query: Query<Entity, With<T>>) {
+    for entity in &query {
+        commands.entity(entity).despawn_recursive();
+    }
 }
 
 fn clear_game_result(mut commands: Commands, finish_text_query: Query<Entity, With<FinishedText>>) {
@@ -428,6 +544,7 @@ mod tests {
                     &transform,
                     Velocity::zero(),
                     Vec2::new(0., 1.),
+                    Vec2::ZERO,
                 );
             },
         );
@@ -477,6 +594,7 @@ mod tests {
                     &transform,
                     Velocity::zero(),
                     Vec2::new(0., 1.),
+                    Vec2::ZERO,
                 );
             },
         );

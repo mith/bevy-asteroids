@@ -4,9 +4,25 @@ version = "0.1.0"
 authors = ["Simon Voordouw <simonvoordouw@gmail.com>"]
 edition = "2021"
 
+
+[profile.release]
+lto = "thin"
+
+[profile.release-debug]
+inherits = "release"
+debug = 1
+
+[profile.dev-opt]
+inherits = "dev"
+opt-level = 1
+debug-assertions = true
+
+[profile.dev-opt.package."*"]
+opt-level = 3
+
 [dependencies]
 assert_approx_eq = "1.1.0"
-bevy = { version="0.13", features=["wayland"] }
+bevy = { version = "0.13", features = ["wayland"] }
 bevy_rapier2d = { version = "0.26.0", features = ["wasm-bindgen"] }
 itertools = "0.12.1"
 rand = "0.8.5"

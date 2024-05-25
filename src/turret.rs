@@ -74,9 +74,11 @@ pub fn fire_projectile(
         if reload_timer_query.get(*turret_entity).is_ok() {
             continue;
         }
-        commands
-            .entity(*turret_entity)
-            .insert(ReloadTimer::default());
+        if let Some(ref mut turret_cmd) = commands.get_entity(*turret_entity) {
+            turret_cmd.insert(ReloadTimer::default());
+        } else {
+            continue;
+        }
         let turret_transform = transform_query.get(*turret_entity).unwrap();
 
         let position = turret_transform.translation.xy()

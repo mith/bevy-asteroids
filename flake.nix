@@ -25,7 +25,7 @@
       system: let
         pkgs = nixpkgs.legacyPackages."${system}";
         rust = fenix.packages.${system}.stable;
-        craneLib = crane.lib."${system}".overrideToolchain rust.toolchain;
+        craneLib = (crane.mkLib nixpkgs.legacyPackages."${system}").overrideToolchain rust.toolchain;
         buildInputs = with pkgs; [
           alsaLib
           udev
@@ -41,86 +41,88 @@
           pkg-config
         ];
       in {
-        packages.bevy-game-bin = craneLib.buildPackage {
-          name = "bevy-game-bin";
-          src = craneLib.cleanCargoSource ./.;
-          inherit buildInputs;
-          inherit nativeBuildInputs;
-        };
-
-        packages.bevy-game-assets = pkgs.stdenv.mkDerivation {
-          name = "bevy-game-assets";
-          src = ./assets;
-          phases = ["unpackPhase" "installPhase"];
-          installPhase = ''
-            mkdir -p $out
-            cp -r $src $out/assets
-          '';
-        };
-
-        packages.bevy-game = pkgs.stdenv.mkDerivation {
-          name = "bevy-game";
-          phases = ["installPhase"];
-          installPhase = ''
-            mkdir -p $out
-            ln -s ${self.packages.${system}.bevy-game-assets}/assets $out/assets
-            cp ${self.packages.${system}.bevy-game-bin}/bin/bevy-game $out/bevy-game
-          '';
-        };
-
-        packages.bevy-game-wasm = let
-          target = "wasm32-unknown-unknown";
-          toolchainWasm = with fenix.packages.${system};
-            combine [
-              stable.rustc
-              stable.cargo
-              targets.${target}.stable.rust-std
-            ];
-          craneWasm = crane.lib.${system}.overrideToolchain toolchainWasm;
-        in
-          craneWasm.buildPackage {
+        packages = {
+          asteroids-bin = craneLib.buildPackage {
+            name = "asteroids-bin";
             src = craneLib.cleanCargoSource ./.;
-            CARGO_BUILD_TARGET = target;
-            CARGO_PROFILE = "release";
+            inherit buildInputs;
             inherit nativeBuildInputs;
-            doCheck = false;
           };
 
-        packages.bevy-game-web = pkgs.stdenv.mkDerivation {
-          name = "bevy-game-web";
-          src = ./web;
-          nativeBuildInputs = [
-            pkgs.wasm-bindgen-cli
-            pkgs.binaryen
-          ];
-          phases = ["unpackPhase" "installPhase"];
-          installPhase = ''
-            mkdir -p $out
-            wasm-bindgen --out-dir $out --out-name bevy-game --target web ${self.packages.${system}.bevy-game-wasm}/bin/bevy-game.wasm
-            mv $out/bevy-game_bg.wasm .
-            wasm-opt -Oz -o $out/bevy-game_bg.wasm bevy-game_bg.wasm
-            cp * $out/
-            ln -s ${self.packages.${system}.bevy-game-assets}/assets $out/assets
+          asteroids-assets = pkgs.stdenv.mkDerivation {
+            name = "asteroids-assets";
+            src = ./assets;
+            phases = ["unpackPhase" "installPhase"];
+            installPhase = ''
+              mkdir -p $out
+              cp -r $src $out/assets
+            '';
+          };
+
+          asteroids = pkgs.stdenv.mkDerivation {
+            name = "asteroids";
+            phases = ["installPhase"];
+            installPhase = ''
+              mkdir -p $out
+              ln -s ${self.packages.${system}.asteroids-assets}/assets $out/assets
+              cp ${self.packages.${system}.asteroids-bin}/bin/asteroids $out/asteroids
+            '';
+          };
+
+          asteroids-wasm = let
+            target = "wasm32-unknown-unknown";
+            toolchainWasm = with fenix.packages.${system};
+              combine [
+                stable.rustc
+                stable.cargo
+                targets.${target}.stable.rust-std
+              ];
+            craneWasm = (crane.mkLib nixpkgs.legacyPackages.${system}).overrideToolchain toolchainWasm;
+          in
+            craneWasm.buildPackage {
+              src = craneLib.cleanCargoSource ./.;
+              CARGO_BUILD_TARGET = target;
+              CARGO_PROFILE = "release";
+              inherit nativeBuildInputs;
+              doCheck = false;
+            };
+
+          asteroids-web = pkgs.stdenv.mkDerivation {
+            name = "asteroids-web";
+            src = ./web;
+            nativeBuildInputs = [
+              pkgs.wasm-bindgen-cli
+              pkgs.binaryen
+            ];
+            phases = ["unpackPhase" "installPhase"];
+            installPhase = ''
+              mkdir -p $out
+              wasm-bindgen --out-dir $out --out-name asteroids --target web ${self.packages.${system}.asteroids-wasm}/bin/asteroids.wasm
+              mv $out/asteroids_bg.wasm .
+              wasm-opt -Oz -o $out/asteroids_bg.wasm asteroids_bg.wasm
+              cp * $out/
+              ln -s ${self.packages.${system}.asteroids-assets}/assets $out/assets
+            '';
+          };
+
+          asteroids-web-server = pkgs.writeShellScriptBin "asteroids-web-server" ''
+            ${pkgs.simple-http-server}/bin/simple-http-server -i -c=html,wasm,ttf,js -- ${self.packages.${system}.asteroids-web}/
           '';
         };
 
-        packages.bevy-game-web-server = pkgs.writeShellScriptBin "bevy-game-web-server" ''
-          ${pkgs.simple-http-server}/bin/simple-http-server -i -c=html,wasm,ttf,js -- ${self.packages.${system}.bevy-game-web}/
-        '';
+        defaultPackage = self.packages.${system}.asteroids;
 
-        defaultPackage = self.packages.${system}.bevy-game;
-
-        apps.bevy-game = flake-utils.lib.mkApp {
-          drv = self.packages.${system}.bevy-game;
-          exePath = "/bevy-game";
+        apps.asteroids = flake-utils.lib.mkApp {
+          drv = self.packages.${system}.asteroids;
+          exePath = "/asteroids";
         };
 
-        apps.bevy-game-web-server = flake-utils.lib.mkApp {
-          drv = self.packages.${system}.bevy-game-web-server;
-          exePath = "/bin/bevy-game-web-server";
+        apps.asteroids-web-server = flake-utils.lib.mkApp {
+          drv = self.packages.${system}.asteroids-web-server;
+          exePath = "/bin/asteroids-web-server";
         };
 
-        defaultApp = self.apps.${system}.bevy-game;
+        defaultApp = self.apps.${system}.asteroids;
 
         checks = {
           pre-commit-check = inputs.pre-commit-hooks.lib.${system}.run {

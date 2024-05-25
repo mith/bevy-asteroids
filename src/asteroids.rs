@@ -2,11 +2,8 @@ use bevy::{
     asset::Assets,
     ecs::{
         component::Component,
-        entity::Entity,
-        query::With,
-        system::{Commands, Query, Res, ResMut},
+        system::{Commands, Res, ResMut},
     },
-    hierarchy::DespawnRecursiveExt,
     log::info,
     math::{
         primitives::{Rectangle, RegularPolygon},
@@ -34,10 +31,11 @@ use crate::{
 #[derive(Component)]
 pub struct Asteroid;
 
-pub const ASTEROID_SPAWN_COUNT: usize = 20;
-pub const ASTEROID_MAX_VERTICE_DRIFT: f32 = 10.;
+pub const ASTEROID_MAX_VERTICES: usize = 14;
+pub const ASTEROID_MAX_VERTICE_DRIFT: f32 = 8.;
 pub const ASTEROID_MAX_SPAWN_LIN_VELOCITY: f32 = 50.;
 pub const ASTEROID_MAX_SPAWN_ANG_VELOCITY: f32 = 1.;
+const ASTEROID_SPAWN_CIRCUMRADIUS: f32 = 50.;
 
 pub const RECTANGULAR_ASTEROIDS: bool = false;
 pub const FROZEN_ASTEROIDS: bool = false;
@@ -48,9 +46,14 @@ pub fn spawn_asteroids(
     mut materials: ResMut<Assets<ColorMaterial>>,
     bounds: Res<Bounds>,
 ) {
-    info!(bounds= ?bounds, number= ?ASTEROID_SPAWN_COUNT, "Spawning asteroids");
+    // Divide bounds area by approximate asteroid area to get a rough estimate of how many asteroids to spawn
+    let asteroid_spawn_count = (((bounds.0.x * bounds.0.y) as usize
+        / (ASTEROID_SPAWN_CIRCUMRADIUS * ASTEROID_SPAWN_CIRCUMRADIUS) as usize)
+        / 10)
+        .clamp(2, 10);
+    info!(bounds= ?bounds, number= ?asteroid_spawn_count, "Spawning asteroids");
     let mut asteroid_positions: Vec<Vec2> = Vec::new();
-    while asteroid_positions.len() < ASTEROID_SPAWN_COUNT {
+    while asteroid_positions.len() < asteroid_spawn_count {
         let mut rng = rand::thread_rng();
         let max_x = bounds.0.x;
         let max_y = bounds.0.y;
@@ -96,7 +99,10 @@ pub fn spawn_asteroid(
         rng.gen_range(-ASTEROID_MAX_SPAWN_ANG_VELOCITY..ASTEROID_MAX_SPAWN_ANG_VELOCITY);
 
     let mut asteroid_mesh = if !RECTANGULAR_ASTEROIDS {
-        Mesh::from(RegularPolygon::new(50., 10))
+        Mesh::from(RegularPolygon::new(
+            ASTEROID_SPAWN_CIRCUMRADIUS,
+            ASTEROID_MAX_VERTICES,
+        ))
     } else {
         Mesh::from(Rectangle::new(100., 100.))
     };
@@ -155,14 +161,5 @@ pub fn spawn_asteroid(
         ));
     } else {
         asteroid_cmd.insert(RigidBody::Fixed);
-    }
-}
-
-pub fn despawn_asteroids(
-    mut commands: Commands,
-    mut asteroid_query: Query<Entity, With<Asteroid>>,
-) {
-    for asteroid_entity in asteroid_query.iter_mut() {
-        commands.entity(asteroid_entity).despawn_recursive();
     }
 }

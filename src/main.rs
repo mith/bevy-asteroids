@@ -45,7 +45,6 @@ fn main() {
         .insert_resource(AssetMetaCheck::Never)
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                mode: WindowMode::BorderlessFullscreen,
                 canvas: Some("#game".to_string()),
                 ..default()
             }),

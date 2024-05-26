@@ -9,7 +9,7 @@ mod turret;
 mod utils;
 
 use asteroids::{debris_lifetime, spawn_asteroids, split_asteroid, Asteroid, Debris};
-use bevy::{prelude::*, sprite::Mesh2dHandle, window::WindowMode};
+use bevy::{asset::AssetMetaCheck, prelude::*, sprite::Mesh2dHandle, window::WindowMode};
 use bevy_rapier2d::{
     dynamics::Velocity,
     plugin::RapierContext,
@@ -42,6 +42,7 @@ fn main() {
     rapier_configuration.gravity = Vec2::new(0., 0.);
 
     app.insert_resource(ClearColor(Color::BLACK))
+        .insert_resource(AssetMetaCheck::Never)
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 mode: WindowMode::BorderlessFullscreen,

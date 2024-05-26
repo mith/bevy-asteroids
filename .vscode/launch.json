@@ -37,7 +37,7 @@
                     "--bin=asteroids",
                     "--package=asteroids",
                     "--profile=dev-opt",
-                    "--features=bevy/trace_chrome"
+                    "--features=bevy/trace_tracy"
                 ],
                 "filter": {
                     "name": "asteroids",

@@ -116,7 +116,7 @@ pub fn trim_mesh(mesh: &Mesh) -> ((Mesh, Vec2), Vec<(Mesh, Vec2)>) {
         let vertex = Vec2::new(vertex[0], vertex[1]);
         let vertex_direction = vertex.normalize(); // Assume (0, 0) is the center of the mesh
         let mesh_area = calculate_mesh_area(&main_mesh);
-        let radius = (mesh_area / std::f32::consts::PI).sqrt();
+        let radius = (mesh_area / std::f32::consts::PI).sqrt() * 1.05;
 
         let vertex_position = vertex_direction * radius;
 

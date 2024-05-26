@@ -8,29 +8,32 @@ mod split_mesh;
 mod turret;
 mod utils;
 
-use asteroids::{spawn_asteroids, Asteroid, ASTEROID_MAX_SPAWN_ANG_VELOCITY, FROZEN_ASTEROIDS};
-use bevy::{
-    prelude::*,
-    sprite::{MaterialMesh2dBundle, Mesh2dHandle},
-    window::WindowMode,
-};
+use asteroids::{debris_lifetime, spawn_asteroids, split_asteroid, Asteroid, Debris};
+use bevy::{prelude::*, sprite::Mesh2dHandle, window::WindowMode};
 use bevy_rapier2d::{
-    dynamics::{RigidBody, Sleeping, Velocity},
-    geometry::{ActiveEvents, ColliderDisabled, Restitution},
+    dynamics::Velocity,
     plugin::RapierContext,
     prelude::{CollisionEvent, NoUserData, RapierConfiguration, RapierPhysicsPlugin},
 };
-use edge_wrap::{Duplicable, EdgeWrapPlugin, EdgeWrapSet};
+use edge_wrap::{EdgeWrapPlugin, EdgeWrapSet};
 use input::{PlayerInputPlugin, PlayerInputSet};
-use mesh_utils::calculate_mesh_area;
 use player::{spawn_player, Player};
-use rand::{rngs::ThreadRng, Rng};
 use ship::ship_movement;
-use split_mesh::{shatter_mesh, split_mesh, trim_mesh};
 use turret::{fire_projectile, projectile_timer, reload, FireEvent, Projectile};
-use utils::mesh_to_collider;
+
+use crate::asteroids::spawn_shattered_mesh;
 
 const PHYSICS_LENGTH_UNIT: f32 = 100.0;
+
+macro_rules! cleanup_types {
+    ( $( $type:ty ),* ) => {
+        (
+            $(
+                cleanup::<$type>,
+            )*
+        )
+    };
+}
 
 fn main() {
     let mut app = App::new();
@@ -55,19 +58,17 @@ fn main() {
         .init_state::<GameState>()
         .add_plugins((EdgeWrapPlugin, PlayerInputPlugin))
         .add_systems(Startup, setup_camera)
+        .add_systems(OnEnter(GameState::Menu), show_menu_ui)
+        .add_systems(OnExit(GameState::Menu), cleanup_types!(Menu))
         .add_systems(OnEnter(GameState::Playing), spawn_player)
         .add_systems(OnEnter(GameState::Playing), spawn_asteroids)
         .add_systems(
             OnExit(GameState::Finished),
-            (
-                cleanup::<Player>,
-                cleanup::<Asteroid>,
-                cleanup::<Debris>,
-                cleanup::<Projectile>,
-            ),
+            cleanup_types!(Player, Asteroid, Debris, Projectile),
         )
         .add_systems(OnEnter(GameState::Finished), show_game_finished)
         .add_systems(OnExit(GameState::Finished), clear_game_result)
+        .add_systems(Update, start_game.run_if(in_state(GameState::Menu)))
         .configure_sets(Update, (PlayerInputSet, EdgeWrapSet).chain())
         .add_event::<FireEvent>()
         .add_systems(
@@ -103,6 +104,7 @@ fn setup_camera(mut commands: Commands) {
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Default, States)]
 enum GameState {
     #[default]
+    Menu,
     Playing,
     Finished,
 }
@@ -152,231 +154,13 @@ fn player_asteroid_collision(
         }
     }
 }
-
-#[derive(Component)]
-struct Debris {
-    lifetime: Timer,
-}
-
-fn split_asteroid(
-    commands: &mut Commands,
-    original_mesh: &Handle<Mesh>,
-    meshes: &mut ResMut<Assets<Mesh>>,
-    materials: &mut ResMut<Assets<ColorMaterial>>,
-    transform: &Transform,
-    velocity: Velocity,
-    collision_direction: Vec2,
-    collision_position: Vec2,
-) {
-    let mesh = meshes.get(original_mesh).expect("Original mesh not found");
-
-    // Rotate the collision direction by the rotation of the asteroid
-    // to get the collision direction in the asteroid's local space.
-    let asteroid_rotation = transform.rotation;
-    let mesh_collision_direction = asteroid_rotation
-        .inverse()
-        .mul_vec3(collision_direction.extend(0.))
-        .truncate()
-        .normalize();
-
-    let [(mesh_a, offset_a), (mesh_b, offset_b)] =
-        split_mesh(mesh, mesh_collision_direction, collision_position);
-
-    let min_area = 500.;
-
-    // Calculate area of the split mesh
-    // Skip spawning if the area of the split mesh is too small
-
-    let mut spawn = |mesh: &Mesh, offset: Vec2| {
-        // Check if mesh contains any vertices
-        if mesh
-            .attribute(Mesh::ATTRIBUTE_POSITION)
-            .map(|attr| attr.len() < 3)
-            .unwrap_or(true)
-        {
-            error!("Mesh has no triangles, skipping split");
-            return;
-        }
-        let trimmed = trim_mesh(mesh);
-        let translation = transform.transform_point((offset + trimmed.0 .1).extend(0.));
-        let main_transform =
-            Transform::from_translation(translation).with_rotation(transform.rotation);
-        let velocity = Velocity {
-            linvel: velocity.linvel
-                + asteroid_rotation
-                    .mul_vec3(offset.extend(0.))
-                    .truncate()
-                    .normalize()
-                    * 50.,
-            angvel: velocity.angvel,
-        };
-        if calculate_mesh_area(mesh) > min_area {
-            // let mesh = round_mesh(mesh).0;
-            spawn_asteroid_split(
-                commands,
-                main_transform,
-                velocity,
-                meshes,
-                materials,
-                &trimmed.0 .0,
-            );
-        } else {
-            spawn_shattered_mesh(mesh, &main_transform, velocity, commands, meshes, materials);
-        }
-
-        for (mesh, trimmed_offset) in trimmed.1 {
-            let translation = transform.transform_point((offset + trimmed_offset).extend(0.));
-            let transform =
-                Transform::from_translation(translation).with_rotation(main_transform.rotation);
-            spawn_shattered_mesh(&mesh, &transform, velocity, commands, meshes, materials);
-        }
-    };
-
-    spawn(&mesh_a, offset_a);
-    spawn(&mesh_b, offset_b);
-}
-
-fn spawn_shattered_mesh(
-    mesh: &Mesh,
-    transform: &Transform,
-    velocity: Velocity,
-    commands: &mut Commands,
-    meshes: &mut ResMut<Assets<Mesh>>,
-    materials: &mut ResMut<Assets<ColorMaterial>>,
-) {
-    let mut rng = ThreadRng::default();
-    let shards = shatter_mesh(mesh, 12.);
-    for (mesh, offset) in shards.iter() {
-        let shard_translation = transform.transform_point(offset.extend(0.));
-        let shard_transform =
-            Transform::from_translation(shard_translation).with_rotation(transform.rotation);
-
-        let rng_range_max = 5.;
-
-        let velocity = Velocity {
-            linvel: transform
-                .rotation
-                .mul_vec3(offset.extend(0.))
-                .normalize()
-                .xy()
-                * 15.
-                + velocity.linvel
-                + Vec2::new(
-                    rng.gen_range(-rng_range_max..rng_range_max),
-                    rng.gen_range(-rng_range_max..rng_range_max),
-                ),
-            angvel: rng
-                .gen_range(-ASTEROID_MAX_SPAWN_ANG_VELOCITY..ASTEROID_MAX_SPAWN_ANG_VELOCITY),
-        };
-
-        spawn_debris(commands, shard_transform, velocity, meshes, materials, mesh)
-    }
-}
-
-fn spawn_asteroid_split(
-    commands: &mut Commands,
-    transform: Transform,
-    velocity: Velocity,
-    meshes: &mut ResMut<Assets<Mesh>>,
-    materials: &mut ResMut<Assets<ColorMaterial>>,
-    mesh: &Mesh,
-) {
-    let collider = mesh_to_collider(mesh);
-
-    let mut asteroid_cmd = commands.spawn((
-        Asteroid,
-        MaterialMesh2dBundle {
-            transform,
-            mesh: Mesh2dHandle(meshes.add(mesh.clone())),
-            material: materials.add(ColorMaterial::from(Color::WHITE)),
-            ..default()
-        },
-        collider,
-        ActiveEvents::COLLISION_EVENTS,
-        Duplicable,
-    ));
-    if !FROZEN_ASTEROIDS {
-        asteroid_cmd.insert((
-            RigidBody::Dynamic,
-            velocity,
-            Restitution {
-                coefficient: 0.9,
-                ..default()
-            },
-            Sleeping {
-                normalized_linear_threshold: 0.001,
-                angular_threshold: 0.001,
-                ..default()
-            },
-        ));
-    } else {
-        asteroid_cmd.insert(RigidBody::Fixed);
-    }
-}
-
-fn spawn_debris(
-    commands: &mut Commands,
-    transform: Transform,
-    velocity: Velocity,
-    meshes: &mut ResMut<Assets<Mesh>>,
-    materials: &mut ResMut<Assets<ColorMaterial>>,
-    mesh: &Mesh,
-) {
-    let collider = mesh_to_collider(mesh);
-    let mut rng = ThreadRng::default();
-
-    let mut asteroid_cmd = commands.spawn((
-        Debris {
-            lifetime: Timer::from_seconds(rng.gen_range(0.5..5.0), TimerMode::Once),
-        },
-        MaterialMesh2dBundle {
-            transform,
-            mesh: Mesh2dHandle(meshes.add(mesh.clone())),
-            material: materials.add(ColorMaterial::from(Color::WHITE)),
-            ..default()
-        },
-        collider,
-        Duplicable,
-        ColliderDisabled,
-    ));
-    if !FROZEN_ASTEROIDS {
-        asteroid_cmd.insert((
-            RigidBody::Dynamic,
-            velocity,
-            Restitution {
-                coefficient: 0.9,
-                ..default()
-            },
-            Sleeping {
-                normalized_linear_threshold: 0.001,
-                angular_threshold: 0.001,
-                ..default()
-            },
-        ));
-    } else {
-        asteroid_cmd.insert(RigidBody::Fixed);
-    }
-}
-
-fn debris_lifetime(
-    mut commands: Commands,
-    time: Res<Time>,
-    mut debris_query: Query<(Entity, &mut Debris)>,
-) {
-    for (entity, mut debris) in &mut debris_query {
-        debris.lifetime.tick(time.delta());
-        if debris.lifetime.finished() {
-            commands.entity(entity).despawn();
-        }
-    }
-}
-
-fn projectile_asteroid_collision(
+pub fn projectile_asteroid_collision(
     mut commands: Commands,
     rapier_context: Res<RapierContext>,
     mut collision_events: EventReader<CollisionEvent>,
     projectile_query: Query<&Projectile>,
     mut asteroid_query: Query<(&Transform, &mut Mesh2dHandle, Option<&Velocity>), With<Asteroid>>,
+    transform_query: Query<&GlobalTransform>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
@@ -396,6 +180,9 @@ fn projectile_asteroid_collision(
             // Split asteroid into smaller asteroids
             if let Ok((transform, mesh_handle, velocity)) = asteroid_query.get_mut(asteroid_entity)
             {
+                let projectile_transform = transform_query
+                    .get(projectile_entity)
+                    .expect("Projectile transform not found");
                 let contact = rapier_context
                     .contact_pair(projectile_entity, asteroid_entity)
                     .expect("No contact found for projectile-asteroid collision");
@@ -405,13 +192,18 @@ fn projectile_asteroid_collision(
                 let (contact_manifold, contact) = contact
                     .find_deepest_contact()
                     .expect("No contact point found for projectile-asteroid collision");
+                let mut velocity = velocity.copied().unwrap_or_else(Velocity::zero);
+                velocity.linvel -= (projectile_transform.translation().xy()
+                    - transform.translation.xy())
+                .normalize()
+                    * 100.;
                 split_asteroid(
                     &mut commands,
                     &mesh_handle.0,
                     &mut meshes,
                     &mut materials,
                     transform,
-                    velocity.copied().unwrap_or_else(Velocity::zero),
+                    velocity,
                     contact_manifold.normal(),
                     contact.local_p2(),
                 );
@@ -434,9 +226,55 @@ fn asteroids_cleared(
 }
 
 #[derive(Component)]
-struct FinishedText;
+struct Menu;
 
 const FONT_PATH: &str = "fonts/TurretRoad-ExtraLight.ttf";
+
+fn show_menu_ui(mut commands: Commands, asset_server: Res<AssetServer>) {
+    commands
+        .spawn((
+            Name::new("Menu screen"),
+            Menu,
+            NodeBundle {
+                style: Style {
+                    width: Val::Percent(100.),
+                    height: Val::Percent(100.),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    flex_direction: FlexDirection::Column,
+                    ..default()
+                },
+                ..default()
+            },
+        ))
+        .with_children(|parent| {
+            parent.spawn((
+                Name::new("Title text"),
+                TextBundle::from_section(
+                    "Asteroids",
+                    TextStyle {
+                        font: asset_server.load(FONT_PATH),
+                        font_size: 90.,
+                        color: Color::WHITE,
+                    },
+                ),
+            ));
+            parent.spawn((
+                Name::new("Start text"),
+                TextBundle::from_section(
+                    "Press Space to start",
+                    TextStyle {
+                        font: asset_server.load(FONT_PATH),
+                        font_size: 40.,
+                        color: Color::WHITE,
+                    },
+                ),
+            ));
+        });
+}
+
+#[derive(Component)]
+struct FinishedText;
 
 fn show_game_finished(
     mut commands: Commands,
@@ -488,6 +326,16 @@ fn show_game_finished(
         });
 }
 
+fn start_game(
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    mut next_gamestate: ResMut<NextState<GameState>>,
+) {
+    if keyboard_input.pressed(KeyCode::Space) {
+        next_gamestate.set(GameState::Playing);
+        info!("Starting game");
+    }
+}
+
 fn restart_game(
     mut commands: Commands,
     keyboard_input: Res<ButtonInput<KeyCode>>,
@@ -514,6 +362,8 @@ fn clear_game_result(mut commands: Commands, finish_text_query: Query<Entity, Wi
 
 #[cfg(test)]
 mod tests {
+
+    use crate::asteroids::split_asteroid;
 
     use super::*;
 

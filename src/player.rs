@@ -15,7 +15,10 @@ use bevy::{
     transform::components::Transform,
     utils::default,
 };
-use bevy_rapier2d::dynamics::RigidBody;
+use bevy_rapier2d::{
+    dynamics::RigidBody,
+    geometry::{CollisionGroups, Group},
+};
 
 use crate::{
     edge_wrap::Duplicable,
@@ -25,6 +28,9 @@ use crate::{
 
 #[derive(Component)]
 pub struct Player;
+
+pub const PLAYER_GROUP: Group = Group::GROUP_1;
+pub const PLAYER_FILTER: Group = Group::ALL;
 
 pub fn spawn_player(
     mut commands: Commands,
@@ -63,6 +69,7 @@ fn spawn_player_ship(
             RigidBody::Dynamic,
             collider,
             Duplicable,
+            CollisionGroups::new(PLAYER_GROUP, PLAYER_FILTER),
         ))
         .with_children(|parent| {
             parent.spawn((

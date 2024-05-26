@@ -13,9 +13,12 @@ use bevy::{
     transform::components::Transform,
     utils::default,
 };
-use bevy_rapier2d::dynamics::{RigidBody, Velocity};
+use bevy_rapier2d::{
+    dynamics::{RigidBody, Velocity},
+    geometry::{CollisionGroups, Group},
+};
 
-use crate::{edge_wrap::Duplicable, utils::mesh_to_collider};
+use crate::{asteroids::ASTEROID_GROUP, edge_wrap::Duplicable, utils::mesh_to_collider};
 
 #[derive(Event, Debug, Clone, Copy)]
 pub struct FireEvent {
@@ -102,6 +105,7 @@ pub fn fire_projectile(
     }
 }
 
+pub const PROJECTILE_GROUP: Group = Group::GROUP_2;
 pub const PROJECTILE_LIFETIME: f32 = 5.;
 
 fn spawn_projectile(
@@ -132,5 +136,6 @@ fn spawn_projectile(
         },
         collider,
         Duplicable,
+        CollisionGroups::new(PROJECTILE_GROUP, ASTEROID_GROUP),
     ));
 }

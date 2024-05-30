@@ -3,6 +3,7 @@ use bevy::{
     ecs::{
         component::Component,
         entity::Entity,
+        event::{Event, EventReader},
         system::{Commands, Query, Res, ResMut},
     },
     log::{error, info},
@@ -171,6 +172,13 @@ pub fn spawn_asteroid(
     }
 }
 
+#[derive(Event)]
+pub struct SplitAsteroidEvent {
+    pub asteroid_entity: Entity,
+    pub collision_direction: Vec2,
+    pub collision_position: Vec2,
+}
+
 #[derive(Component)]
 pub struct Debris {
     lifetime: Timer,
@@ -180,7 +188,33 @@ const ASTEROID_MIN_AREA: f32 = 500.;
 
 const DEBRIS_MAX_AREA: f32 = 6.;
 
-pub fn split_asteroid(
+pub fn split_asteroid_event(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    mut asteroid_query: Query<(&Transform, &Velocity, &mut Mesh2dHandle)>,
+    mut split_asteroid_events: EventReader<SplitAsteroidEvent>,
+) {
+    for event in split_asteroid_events.read() {
+        let (transform, velocity, mesh_handle) = asteroid_query
+            .get_mut(event.asteroid_entity)
+            .expect("Asteroid entity not found");
+        split_asteroid(
+            &mut commands,
+            &mesh_handle.0,
+            &mut meshes,
+            &mut materials,
+            transform,
+            *velocity,
+            event.collision_direction,
+            event.collision_position,
+        );
+
+        commands.entity(event.asteroid_entity).despawn();
+    }
+}
+
+fn split_asteroid(
     commands: &mut Commands,
     original_mesh: &Handle<Mesh>,
     meshes: &mut ResMut<Assets<Mesh>>,
@@ -398,5 +432,115 @@ pub fn debris_lifetime(
         if debris.lifetime.finished() {
             commands.entity(entity).despawn();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use bevy::{
+        app::{App, Startup},
+        math::{primitives::Rectangle, Quat},
+    };
+
+    use crate::asteroids::split_asteroid;
+
+    use super::*;
+
+    #[test]
+    fn test_split_asteroid_rectangle() {
+        let mut app = App::new();
+
+        app.insert_resource(Assets::<Mesh>::default())
+            .insert_resource(Assets::<ColorMaterial>::default());
+
+        app.add_systems(
+            Startup,
+            |mut commands: Commands,
+             mut meshes: ResMut<Assets<Mesh>>,
+             mut materials: ResMut<Assets<ColorMaterial>>| {
+                let rectangle_shape = Rectangle::from_size(Vec2::new(100., 100.));
+                let asteroid_mesh = Mesh::from(rectangle_shape);
+                let mesh_handle = meshes.add(asteroid_mesh.clone());
+
+                let transform = Transform::default();
+
+                split_asteroid(
+                    &mut commands,
+                    &mesh_handle,
+                    &mut meshes,
+                    &mut materials,
+                    &transform,
+                    Velocity::zero(),
+                    Vec2::new(0., 1.),
+                    Vec2::ZERO,
+                );
+            },
+        );
+
+        app.run();
+
+        // Check that 2 splits were created
+        // They should be located at (-25, 0) and (25, 0)
+
+        assert_eq!(app.world.query::<&Asteroid>().iter(&app.world).len(), 2);
+
+        app.world
+            .query::<(&Transform, &Asteroid)>()
+            .iter(&app.world)
+            .for_each(|(transform, _)| {
+                let translation = transform.translation;
+                assert!(translation.x == -25. || translation.x == 25.);
+                assert_eq!(translation.y, 0.);
+            });
+    }
+
+    #[test]
+    fn test_split_asteroid_rectangle_90_cw_rotated() {
+        let mut app = App::new();
+
+        app.insert_resource(Assets::<Mesh>::default())
+            .insert_resource(Assets::<ColorMaterial>::default());
+
+        app.add_systems(
+            Startup,
+            |mut commands: Commands,
+             mut meshes: ResMut<Assets<Mesh>>,
+             mut materials: ResMut<Assets<ColorMaterial>>| {
+                let rectangle_shape = Rectangle::from_size(Vec2::new(100., 100.));
+                let asteroid_mesh = Mesh::from(rectangle_shape);
+                let mesh_handle = meshes.add(asteroid_mesh.clone());
+
+                let transform =
+                    Transform::from_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2));
+
+                split_asteroid(
+                    &mut commands,
+                    &mesh_handle,
+                    &mut meshes,
+                    &mut materials,
+                    &transform,
+                    Velocity::zero(),
+                    Vec2::new(0., 1.),
+                    Vec2::ZERO,
+                );
+            },
+        );
+
+        app.run();
+
+        // Check that 2 splits were created
+        // They should be located at (0, -25) and (0, 25)
+
+        assert_eq!(app.world.query::<&Asteroid>().iter(&app.world).len(), 2);
+
+        app.world
+            .query::<(&Transform, &Asteroid)>()
+            .iter(&app.world)
+            .for_each(|(transform, _)| {
+                let translation = transform.translation;
+                assert!(translation.y == -25. || translation.y == 25.);
+                assert_eq!(translation.x, 0.);
+            });
     }
 }

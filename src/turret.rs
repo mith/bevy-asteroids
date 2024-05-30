@@ -6,19 +6,14 @@ use bevy::{
         event::{Event, EventReader},
         system::{Commands, Query, Res, ResMut},
     },
-    math::{primitives::RegularPolygon, Vec2, Vec3, Vec3Swizzles},
-    render::{color::Color, mesh::Mesh},
-    sprite::{ColorMaterial, MaterialMesh2dBundle},
+    math::{Vec3, Vec3Swizzles},
+    render::mesh::Mesh,
+    sprite::ColorMaterial,
     time::{Time, Timer, TimerMode},
     transform::components::Transform,
-    utils::default,
-};
-use bevy_rapier2d::{
-    dynamics::{RigidBody, Velocity},
-    geometry::{CollisionGroups, Group},
 };
 
-use crate::{asteroids::ASTEROID_GROUP, edge_wrap::Duplicable, utils::mesh_to_collider};
+use crate::projectile::{spawn_projectile, Projectile};
 
 #[derive(Event, Debug, Clone, Copy)]
 pub struct FireEvent {
@@ -46,23 +41,6 @@ pub fn reload(
             commands.entity(entity).remove::<ReloadTimer>();
         }
     }
-}
-
-pub fn projectile_timer(
-    mut commands: Commands,
-    mut query: Query<(Entity, &mut Projectile)>,
-    time: Res<Time>,
-) {
-    for (entity, mut projectile) in query.iter_mut() {
-        if projectile.lifetime.tick(time.delta()).just_finished() {
-            commands.entity(entity).despawn();
-        }
-    }
-}
-
-#[derive(Component)]
-pub struct Projectile {
-    lifetime: Timer,
 }
 
 pub fn fire_projectile(
@@ -103,39 +81,4 @@ pub fn fire_projectile(
             velocity,
         );
     }
-}
-
-pub const PROJECTILE_GROUP: Group = Group::GROUP_2;
-pub const PROJECTILE_LIFETIME: f32 = 5.;
-
-fn spawn_projectile(
-    commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<ColorMaterial>,
-    position: Vec2,
-    velocity: Vec2,
-) {
-    let projectile_shape = RegularPolygon::new(4., 8);
-
-    let projectile_mesh = Mesh::from(projectile_shape);
-    let collider = mesh_to_collider(&projectile_mesh);
-    commands.spawn((
-        Projectile {
-            lifetime: Timer::from_seconds(PROJECTILE_LIFETIME, TimerMode::Once),
-        },
-        MaterialMesh2dBundle {
-            mesh: meshes.add(projectile_mesh).into(),
-            material: materials.add(ColorMaterial::from(Color::WHITE)),
-            transform: Transform::from_translation(position.extend(0.)),
-            ..default()
-        },
-        RigidBody::Dynamic,
-        Velocity {
-            linvel: velocity,
-            ..default()
-        },
-        collider,
-        Duplicable,
-        CollisionGroups::new(PROJECTILE_GROUP, ASTEROID_GROUP),
-    ));
 }

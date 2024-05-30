@@ -3,23 +3,29 @@ mod edge_wrap;
 mod input;
 mod mesh_utils;
 mod player;
+mod projectile;
 mod ship;
 mod split_mesh;
 mod turret;
 mod utils;
 
-use asteroids::{debris_lifetime, spawn_asteroids, split_asteroid, Asteroid, Debris};
-use bevy::{asset::AssetMetaCheck, prelude::*, sprite::Mesh2dHandle, window::WindowMode};
+use asteroids::{
+    debris_lifetime, spawn_asteroids, split_asteroid_event, Asteroid, Debris, SplitAsteroidEvent,
+};
+use bevy::{asset::AssetMetaCheck, prelude::*, sprite::Mesh2dHandle};
 use bevy_rapier2d::{
     dynamics::Velocity,
-    plugin::RapierContext,
     prelude::{CollisionEvent, NoUserData, RapierConfiguration, RapierPhysicsPlugin},
 };
 use edge_wrap::{EdgeWrapPlugin, EdgeWrapSet};
 use input::{PlayerInputPlugin, PlayerInputSet};
 use player::{spawn_player, Player};
+use projectile::{
+    explosion_expansion, projectile_asteroid_collision, projectile_explosion, projectile_timer,
+    Projectile, ProjectileExplosionEvent,
+};
 use ship::ship_movement;
-use turret::{fire_projectile, projectile_timer, reload, FireEvent, Projectile};
+use turret::{fire_projectile, reload, FireEvent};
 
 use crate::asteroids::spawn_shattered_mesh;
 
@@ -71,6 +77,8 @@ fn main() {
         .add_systems(Update, start_game.run_if(in_state(GameState::Menu)))
         .configure_sets(Update, (PlayerInputSet, EdgeWrapSet).chain())
         .add_event::<FireEvent>()
+        .add_event::<ProjectileExplosionEvent>()
+        .add_event::<SplitAsteroidEvent>()
         .add_systems(
             Update,
             (
@@ -79,6 +87,9 @@ fn main() {
                 apply_deferred,
                 fire_projectile,
                 projectile_asteroid_collision,
+                split_asteroid_event,
+                projectile_explosion,
+                explosion_expansion,
                 apply_deferred,
                 debris_lifetime,
                 asteroids_cleared.run_if(in_state(GameState::Playing)),
@@ -150,64 +161,6 @@ fn player_asteroid_collision(
                 );
 
                 commands.entity(player_entity).despawn_recursive();
-            }
-        }
-    }
-}
-pub fn projectile_asteroid_collision(
-    mut commands: Commands,
-    rapier_context: Res<RapierContext>,
-    mut collision_events: EventReader<CollisionEvent>,
-    projectile_query: Query<&Projectile>,
-    mut asteroid_query: Query<(&Transform, &mut Mesh2dHandle, Option<&Velocity>), With<Asteroid>>,
-    transform_query: Query<&GlobalTransform>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
-) {
-    for event in collision_events.read() {
-        if let CollisionEvent::Started(entity_a, entity_b, _) = event {
-            let (projectile_entity, asteroid_entity) = if projectile_query.contains(*entity_a)
-                && asteroid_query.contains(*entity_b)
-            {
-                (*entity_a, *entity_b)
-            } else if projectile_query.contains(*entity_b) && asteroid_query.contains(*entity_a) {
-                (*entity_b, *entity_a)
-            } else {
-                continue;
-            };
-
-            commands.entity(projectile_entity).despawn();
-            // Split asteroid into smaller asteroids
-            if let Ok((transform, mesh_handle, velocity)) = asteroid_query.get_mut(asteroid_entity)
-            {
-                let projectile_transform = transform_query
-                    .get(projectile_entity)
-                    .expect("Projectile transform not found");
-                let contact = rapier_context
-                    .contact_pair(projectile_entity, asteroid_entity)
-                    .expect("No contact found for projectile-asteroid collision");
-                if !contact.has_any_active_contacts() {
-                    continue;
-                }
-                let (contact_manifold, contact) = contact
-                    .find_deepest_contact()
-                    .expect("No contact point found for projectile-asteroid collision");
-                let mut velocity = velocity.copied().unwrap_or_else(Velocity::zero);
-                velocity.linvel -= (projectile_transform.translation().xy()
-                    - transform.translation.xy())
-                .normalize()
-                    * 100.;
-                split_asteroid(
-                    &mut commands,
-                    &mesh_handle.0,
-                    &mut meshes,
-                    &mut materials,
-                    transform,
-                    velocity,
-                    contact_manifold.normal(),
-                    contact.local_p2(),
-                );
-                commands.entity(asteroid_entity).despawn();
             }
         }
     }
@@ -357,112 +310,5 @@ fn cleanup<T: Component>(mut commands: Commands, query: Query<Entity, With<T>>) 
 fn clear_game_result(mut commands: Commands, finish_text_query: Query<Entity, With<FinishedText>>) {
     for finished_text_entity in &finish_text_query {
         commands.entity(finished_text_entity).despawn_recursive();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-
-    use crate::asteroids::split_asteroid;
-
-    use super::*;
-
-    #[test]
-    fn test_split_asteroid_rectangle() {
-        let mut app = App::new();
-
-        app.insert_resource(Assets::<Mesh>::default())
-            .insert_resource(Assets::<ColorMaterial>::default());
-
-        app.add_systems(
-            Startup,
-            |mut commands: Commands,
-             mut meshes: ResMut<Assets<Mesh>>,
-             mut materials: ResMut<Assets<ColorMaterial>>| {
-                let rectangle_shape =
-                    bevy::math::primitives::Rectangle::from_size(Vec2::new(100., 100.));
-                let asteroid_mesh = Mesh::from(rectangle_shape);
-                let mesh_handle = meshes.add(asteroid_mesh.clone());
-
-                let transform = Transform::default();
-
-                split_asteroid(
-                    &mut commands,
-                    &mesh_handle,
-                    &mut meshes,
-                    &mut materials,
-                    &transform,
-                    Velocity::zero(),
-                    Vec2::new(0., 1.),
-                    Vec2::ZERO,
-                );
-            },
-        );
-
-        app.run();
-
-        // Check that 2 splits were created
-        // They should be located at (-25, 0) and (25, 0)
-
-        assert_eq!(app.world.query::<&Asteroid>().iter(&app.world).len(), 2);
-
-        app.world
-            .query::<(&Transform, &Asteroid)>()
-            .iter(&app.world)
-            .for_each(|(transform, _)| {
-                let translation = transform.translation;
-                assert!(translation.x == -25. || translation.x == 25.);
-                assert_eq!(translation.y, 0.);
-            });
-    }
-
-    #[test]
-    fn test_split_asteroid_rectangle_90_cw_rotated() {
-        let mut app = App::new();
-
-        app.insert_resource(Assets::<Mesh>::default())
-            .insert_resource(Assets::<ColorMaterial>::default());
-
-        app.add_systems(
-            Startup,
-            |mut commands: Commands,
-             mut meshes: ResMut<Assets<Mesh>>,
-             mut materials: ResMut<Assets<ColorMaterial>>| {
-                let rectangle_shape =
-                    bevy::math::primitives::Rectangle::from_size(Vec2::new(100., 100.));
-                let asteroid_mesh = Mesh::from(rectangle_shape);
-                let mesh_handle = meshes.add(asteroid_mesh.clone());
-
-                let transform =
-                    Transform::from_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2));
-
-                split_asteroid(
-                    &mut commands,
-                    &mesh_handle,
-                    &mut meshes,
-                    &mut materials,
-                    &transform,
-                    Velocity::zero(),
-                    Vec2::new(0., 1.),
-                    Vec2::ZERO,
-                );
-            },
-        );
-
-        app.run();
-
-        // Check that 2 splits were created
-        // They should be located at (0, -25) and (0, 25)
-
-        assert_eq!(app.world.query::<&Asteroid>().iter(&app.world).len(), 2);
-
-        app.world
-            .query::<(&Transform, &Asteroid)>()
-            .iter(&app.world)
-            .for_each(|(transform, _)| {
-                let translation = transform.translation;
-                assert!(translation.y == -25. || translation.y == 25.);
-                assert_eq!(translation.x, 0.);
-            });
     }
 }

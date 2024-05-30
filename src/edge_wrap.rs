@@ -21,7 +21,7 @@ use bevy::{
     window::Window,
 };
 use bevy_rapier2d::{
-    geometry::Collider,
+    geometry::{ActiveEvents, Collider},
     na::{Isometry2, Vector2},
 };
 
@@ -100,8 +100,8 @@ struct Original {
 }
 
 #[derive(Component, Debug)]
-struct Duplicate {
-    original: Entity,
+pub struct Duplicate {
+    pub original: Entity,
 }
 
 fn duplicate_on_map_edge(
@@ -221,6 +221,7 @@ fn spawn_duplicate(
                 ..Default::default()
             },
             collider.clone(),
+            ActiveEvents::COLLISION_EVENTS,
         ))
         .id()
 }

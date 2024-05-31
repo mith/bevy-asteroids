@@ -1,5 +1,6 @@
 mod asteroid;
 mod edge_wrap;
+mod explosion;
 mod game_state;
 mod input;
 mod mesh_utils;
@@ -15,6 +16,7 @@ use asteroid::{spawn_asteroids, Asteroid, AsteroidPlugin, AsteroidSet, Debris};
 use bevy::{asset::AssetMetaCheck, prelude::*};
 use bevy_rapier2d::prelude::{NoUserData, RapierConfiguration, RapierPhysicsPlugin};
 use edge_wrap::{EdgeWrapPlugin, EdgeWrapSet};
+use explosion::{Explosion, ExplosionPlugin, ExplosionSet};
 use game_state::{GameResult, GameState};
 use input::{PlayerInputPlugin, PlayerInputSet};
 use player::{spawn_player, Player};
@@ -63,6 +65,7 @@ fn main() {
             ShipPlugin,
             TurretPlugin,
             ProjectilePlugin,
+            ExplosionPlugin,
             AsteroidPlugin,
             StartScreenPlugin,
             FinishedScreenPlugin,
@@ -72,27 +75,23 @@ fn main() {
         .add_systems(OnEnter(GameState::Playing), spawn_asteroids)
         .add_systems(
             OnExit(GameState::Finished),
-            cleanup_types!(Player, Asteroid, Debris, Projectile),
+            cleanup_types!(Player, Asteroid, Debris, Projectile, Explosion),
         )
         .configure_sets(
             Update,
             (
                 PlayerInputSet,
-                EdgeWrapSet,
                 ShipSet,
+                EdgeWrapSet,
                 TurretSet,
                 ProjectileSet,
-                AsteroidSet,
+                (ExplosionSet, AsteroidSet),
             )
                 .chain(),
         )
         .add_systems(
             Update,
-            (
-                (player_destroyed, asteroids_cleared).run_if(in_state(GameState::Playing)),
-                restart_game.run_if(in_state(GameState::Finished)),
-            )
-                .chain(),
+            ((player_destroyed, asteroids_cleared).run_if(in_state(GameState::Playing)),).chain(),
         );
 
     app.run();
@@ -108,13 +107,13 @@ fn player_destroyed(
     mut ship_destroyed_events: EventReader<ShipDestroyedEvent>,
     player_query: Query<Entity, With<Player>>,
 ) {
-    for _ in ship_destroyed_events.read() {
-        if player_query.is_empty() {
-            info!("Player destroyed");
-            commands.insert_resource(GameResult::Lose);
-            next_gamestate.set(GameState::Finished);
-        }
+    if !ship_destroyed_events.is_empty() && player_query.is_empty() {
+        info!("Player destroyed");
+        commands.insert_resource(GameResult::Lose);
+        next_gamestate.set(GameState::Finished);
     }
+
+    ship_destroyed_events.clear();
 }
 
 fn asteroids_cleared(
@@ -126,16 +125,5 @@ fn asteroids_cleared(
         info!("All asteroids cleared");
         commands.insert_resource(GameResult::Win);
         next_gamestate.set(GameState::Finished);
-    }
-}
-fn restart_game(
-    mut commands: Commands,
-    keyboard_input: Res<ButtonInput<KeyCode>>,
-    mut next_gamestate: ResMut<NextState<GameState>>,
-) {
-    if keyboard_input.pressed(KeyCode::KeyR) {
-        commands.remove_resource::<GameResult>();
-        next_gamestate.set(GameState::Playing);
-        info!("Restarting game");
     }
 }

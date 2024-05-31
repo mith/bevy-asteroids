@@ -5,7 +5,7 @@ use bevy::{
         component::Component,
         entity::Entity,
         event::{Event, EventReader},
-        schedule::{apply_deferred, IntoSystemConfigs, SystemSet},
+        schedule::{IntoSystemConfigs, SystemSet},
         system::{Commands, Query, Res, ResMut},
     },
     log::{error, info},
@@ -41,7 +41,7 @@ impl Plugin for AsteroidPlugin {
     fn build(&self, app: &mut App) {
         app.add_event::<SplitAsteroidEvent>().add_systems(
             Update,
-            (split_asteroid_event, apply_deferred, debris_lifetime)
+            (split_asteroid_event, debris_lifetime)
                 .chain()
                 .in_set(AsteroidSet),
         );
@@ -54,10 +54,10 @@ pub struct AsteroidSet;
 #[derive(Component)]
 pub struct Asteroid;
 
-pub const ASTEROID_MAX_VERTICES: usize = 14;
-pub const ASTEROID_MAX_VERTICE_DRIFT: f32 = 8.;
-pub const ASTEROID_MAX_SPAWN_LIN_VELOCITY: f32 = 50.;
-pub const ASTEROID_MAX_SPAWN_ANG_VELOCITY: f32 = 1.;
+const ASTEROID_MAX_VERTICES: usize = 14;
+const ASTEROID_MAX_VERTICE_DRIFT: f32 = 8.;
+const ASTEROID_MAX_SPAWN_LIN_VELOCITY: f32 = 50.;
+const ASTEROID_MAX_SPAWN_ANG_VELOCITY: f32 = 1.;
 const ASTEROID_SPAWN_CIRCUMRADIUS: f32 = 50.;
 
 pub const RECTANGULAR_ASTEROIDS: bool = false;
@@ -269,8 +269,8 @@ fn split_asteroid(
             error!("Mesh has no triangles, skipping split");
             return;
         }
-        let trimmed = trim_mesh(mesh);
-        let translation = transform.transform_point((offset + trimmed.0 .1).extend(0.));
+        let (main_mesh, trimmings) = trim_mesh(mesh);
+        let translation = transform.transform_point((offset + main_mesh.1).extend(0.));
         let main_transform =
             Transform::from_translation(translation).with_rotation(transform.rotation);
         let velocity = Velocity {
@@ -291,13 +291,13 @@ fn split_asteroid(
                 velocity,
                 meshes,
                 materials,
-                &trimmed.0 .0,
+                &main_mesh.0,
             );
         } else if mesh_area > 0. && mesh_area < ASTEROID_MIN_AREA {
             spawn_shattered_mesh(mesh, &main_transform, velocity, commands, meshes, materials);
         }
 
-        for (mesh, trimmed_offset) in trimmed.1 {
+        for (mesh, trimmed_offset) in trimmings {
             let translation = transform.transform_point((offset + trimmed_offset).extend(0.));
             let transform =
                 Transform::from_translation(translation).with_rotation(main_transform.rotation);

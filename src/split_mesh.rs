@@ -4,7 +4,7 @@ use bevy::{
         mesh::{Indices, PrimitiveTopology},
         render_asset::RenderAssetUsages,
     },
-    utils::{warn, HashSet},
+    utils::HashSet,
 };
 use itertools::Itertools;
 use rand::seq::IteratorRandom;
@@ -319,7 +319,7 @@ fn vertices_center(vertices: &[Vec2]) -> Vec2 {
     (min + max) / 2.0
 }
 
-fn recenter_mesh(vertices: &mut Vec<Vec2>) -> Vec2 {
+fn recenter_mesh(vertices: &mut [Vec2]) -> Vec2 {
     let center = vertices_center(vertices);
     for vertex in vertices.iter_mut() {
         *vertex -= center;
@@ -408,7 +408,7 @@ mod tests {
         let split_direction = Vec2::new(0.0, 1.0);
 
         // Split the mesh
-        let [(mesh_a, offset_a), (mesh_b, offset_b)] =
+        let [(mesh_a, offset_a), (_mesh_b, _offset_b)] =
             split_mesh(&mesh, split_direction, Vec2::ZERO);
 
         // Validate the results
@@ -470,6 +470,6 @@ mod tests {
         ]));
 
         // Trim the mesh
-        let ((main_mesh, offset), shards) = trim_mesh(&mesh);
+        let ((_main_mesh, _offset), _shards) = trim_mesh(&mesh);
     }
 }

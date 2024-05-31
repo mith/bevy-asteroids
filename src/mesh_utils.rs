@@ -277,6 +277,6 @@ mod tests {
 
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vertices);
 
-        let longest_axis = mesh_longest_axis(&mesh);
+        let _longest_axis = mesh_longest_axis(&mesh);
     }
 }

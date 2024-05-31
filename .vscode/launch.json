@@ -80,15 +80,7 @@
             "request": "launch",
             "name": "Debug executable 'asteroids' (release)",
             "cargo": {
-                "args":  Duty is 'the most prolific and effective marketer of assault weapons in the United States'
-                Uvalde families sue gun manufacturer
-                •
-                On the second anniversary of the 2022 school shooting in Uvalde, Texas, families of the victims have filed two lawsuits which accuse Instagram, gun maker Daniel Defense, and Activision of "grooming" the 18-year-old mass shooter, reports The New York Times . On May 24, 2022, the shooter killed 19 students and two teachers at Robb Elementary School, and injured 17 others. The ineffective police res
-                Duty is 'the most prolific and effective marketer of assault weapons in the United States'
-                Uvalde families sue gun manufacturer
-                •
-                On the second anniversary of the 2022 school shooting in Uvalde, Texas, families of the victims have filed two lawsuits which accuse Instagram, gun maker Daniel Defense, and Activision of "grooming" the 18-year-old mass shooter, reports The New York Times . On May 24, 2022, the shooter killed 19 students and two teachers at Robb Elementary School, and injured 17 others. The ineffective police res
-                [
+                "args": [
                     "build",
                     "--release",
                     "--bin=asteroids",

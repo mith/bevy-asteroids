@@ -5,7 +5,6 @@ use bevy::{
         event::EventWriter,
         query::With,
         schedule::{
-            apply_deferred,
             common_conditions::{in_state, not},
             IntoSystemConfigs, SystemSet,
         },
@@ -33,9 +32,7 @@ impl Plugin for PlayerInputPlugin {
             (
                 player_ship_input.run_if(in_state(GameState::Playing)),
                 stop_player_throttling.run_if(not(in_state(GameState::Playing))),
-                apply_deferred,
             )
-                .chain()
                 .in_set(PlayerInputSet),
         );
     }
@@ -46,7 +43,6 @@ pub struct PlayerInputSet;
 
 pub fn player_ship_input(
     mut commands: Commands,
-    keyboard_input: Res<ButtonInput<KeyCode>>,
     mouse_input: Res<ButtonInput<MouseButton>>,
     mut player_query: Query<(Entity, &GlobalTransform, &mut Transform), (With<Player>, With<Ship>)>,
     camera_query: Query<(&Camera, &GlobalTransform)>,
@@ -63,8 +59,7 @@ pub fn player_ship_input(
     };
 
     for (player_entity, player_global_transform, mut player_transform) in player_query.iter_mut() {
-        let throttle =
-            keyboard_input.pressed(KeyCode::Space) || mouse_input.pressed(MouseButton::Left);
+        let throttle = mouse_input.pressed(MouseButton::Left);
 
         if throttle {
             commands.entity(player_entity).insert(Throttling);

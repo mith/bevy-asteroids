@@ -6,9 +6,7 @@ use bevy::{
         entity::Entity,
         query::With,
         removal_detection::RemovedComponents,
-        schedule::{
-            apply_deferred, common_conditions::resource_exists, IntoSystemConfigs, SystemSet,
-        },
+        schedule::{common_conditions::resource_exists, IntoSystemConfigs, SystemSet},
         system::{Commands, Query, Res, ResMut, Resource},
     },
     gizmos::gizmos::Gizmos,
@@ -41,9 +39,7 @@ impl Plugin for EdgeWrapPlugin {
                 Update,
                 (
                     duplicable_removed,
-                    apply_deferred,
                     duplicate_on_map_edge,
-                    apply_deferred,
                     sync_duplicate_transforms,
                     teleport_original_to_swap,
                 )
@@ -425,6 +421,17 @@ fn duplicable_removed(
                 commands.entity(duplicate_entity).despawn_recursive();
             }
         }
+    }
+}
+
+pub fn get_original_entities(
+    duplicate_query: &Query<&Duplicate, ()>,
+    entity_a: &Entity,
+) -> (Entity, Option<Entity>) {
+    if let Ok(Duplicate { original }) = duplicate_query.get(*entity_a) {
+        (*original, Some(*entity_a))
+    } else {
+        (*entity_a, None)
     }
 }
 

@@ -32,7 +32,7 @@ pub struct StartScreen;
 
 const FONT_PATH: &str = "fonts/TurretRoad-ExtraLight.ttf";
 
-pub fn spawn_start_screen(mut commands: Commands, asset_server: Res<AssetServer>) {
+fn spawn_start_screen(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands
         .spawn((
             Name::new("Start screen"),
@@ -123,15 +123,16 @@ pub struct FinishedScreenPlugin;
 
 impl Plugin for FinishedScreenPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(GameState::Finished), show_game_finished)
-            .add_systems(OnExit(GameState::Finished), cleanup::<FinishedText>);
+        app.add_systems(OnEnter(GameState::Finished), spawn_game_finished_screen)
+            .add_systems(OnExit(GameState::Finished), cleanup::<FinishedText>)
+            .add_systems(Update, restart_game.run_if(in_state(GameState::Finished)));
     }
 }
 
 #[derive(Component)]
 pub struct FinishedText;
 
-pub fn show_game_finished(
+fn spawn_game_finished_screen(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     game_result: Res<GameResult>,
@@ -179,4 +180,16 @@ pub fn show_game_finished(
                 ),
             ));
         });
+}
+
+fn restart_game(
+    mut commands: Commands,
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    mut next_gamestate: ResMut<NextState<GameState>>,
+) {
+    if keyboard_input.pressed(KeyCode::KeyR) {
+        commands.remove_resource::<GameResult>();
+        next_gamestate.set(GameState::Playing);
+        info!("Restarting game");
+    }
 }

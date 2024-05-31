@@ -6,16 +6,13 @@ use bevy::{
         entity::Entity,
         event::{Event, EventReader, EventWriter},
         query::With,
-        schedule::{apply_deferred, IntoSystemConfigs, SystemSet},
+        schedule::{IntoSystemConfigs, SystemSet},
         system::{Commands, Query, Res, ResMut},
     },
     hierarchy::{Children, DespawnRecursiveExt},
     log::info,
     math::{FloatExt, Vec3, Vec3Swizzles},
-    render::{
-        mesh::Mesh,
-        view::{visibility, Visibility},
-    },
+    render::{mesh::Mesh, view::Visibility},
     sprite::{ColorMaterial, Mesh2dHandle},
     time::Time,
     transform::components::Transform,
@@ -23,10 +20,15 @@ use bevy::{
 };
 use bevy_rapier2d::{
     dynamics::{ExternalImpulse, Velocity},
+    plugin::RapierContext,
     prelude::CollisionEvent,
 };
 
-use crate::asteroid::spawn_shattered_mesh;
+use crate::{
+    asteroid::{spawn_shattered_mesh, Asteroid, SplitAsteroidEvent},
+    explosion::spawn_explosion,
+    utils::contact_position_and_normal,
+};
 
 pub struct ShipPlugin;
 
@@ -34,7 +36,7 @@ impl Plugin for ShipPlugin {
     fn build(&self, app: &mut App) {
         app.add_event::<ShipDestroyedEvent>().add_systems(
             Update,
-            (ship_movement, apply_deferred, ship_asteroid_collision)
+            (ship_movement, ship_asteroid_collision)
                 .chain()
                 .in_set(ShipSet),
         );
@@ -137,16 +139,19 @@ pub struct ShipDestroyedEvent {
 
 fn ship_asteroid_collision(
     mut commands: Commands,
+    rapier_context: Res<RapierContext>,
     mut collision_events: EventReader<CollisionEvent>,
     ship_query: Query<(Entity, &Transform, Option<&Velocity>, &mut Mesh2dHandle), With<Ship>>,
+    asteroid_query: Query<&Asteroid>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     mut ship_destroyed_events: EventWriter<ShipDestroyedEvent>,
+    mut split_asteroid_events: EventWriter<SplitAsteroidEvent>,
 ) {
     for event in collision_events.read() {
         if let CollisionEvent::Started(entity_a, entity_b, _) = event {
-            let Some((player_entity, player_transform, player_velocity, player_mesh_handle)) =
-                ship_query.get_single().ok()
+            let Ok((player_entity, player_transform, player_velocity, player_mesh_handle)) =
+                ship_query.get_single()
             else {
                 return;
             };
@@ -172,6 +177,38 @@ fn ship_asteroid_collision(
                 ship_destroyed_events.send(ShipDestroyedEvent {
                     ship_entity: player_entity,
                 });
+
+                spawn_explosion(
+                    &mut commands,
+                    &mut meshes,
+                    &mut materials,
+                    player_transform,
+                    6.,
+                );
+
+                if let Some(asteroid_entity) = if *entity_a == player_entity {
+                    Some(*entity_b)
+                } else if *entity_b == player_entity {
+                    Some(*entity_a)
+                } else {
+                    None
+                } {
+                    let Some((collision_position, collision_direction)) =
+                        contact_position_and_normal(
+                            &rapier_context,
+                            player_entity,
+                            asteroid_entity,
+                        )
+                    else {
+                        continue;
+                    };
+
+                    split_asteroid_events.send(SplitAsteroidEvent {
+                        asteroid_entity,
+                        collision_direction,
+                        collision_position,
+                    });
+                }
             }
         }
     }

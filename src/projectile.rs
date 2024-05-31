@@ -1,7 +1,8 @@
 use crate::{
     asteroid::{Asteroid, SplitAsteroidEvent, ASTEROID_GROUP},
-    edge_wrap::{Duplicable, Duplicate},
-    utils::mesh_to_collider,
+    edge_wrap::{get_original_entities, Duplicable, Duplicate},
+    explosion::spawn_explosion,
+    utils::{contact_position_and_normal, mesh_to_collider},
 };
 use bevy::{ecs::component::Component, time::Timer};
 use bevy::{prelude::*, sprite::MaterialMesh2dBundle};
@@ -20,11 +21,8 @@ impl Plugin for ProjectilePlugin {
             Update,
             (
                 projectile_timer,
-                apply_deferred,
                 projectile_asteroid_collision,
                 projectile_explosion,
-                explosion_expansion,
-                apply_deferred,
             )
                 .chain()
                 .after(ProjectileSet),
@@ -126,18 +124,14 @@ fn projectile_asteroid_collision(
             let projectile_transform = transform_query
                 .get(projectile_entity)
                 .expect("Projectile transform not found");
-            let contact = rapier_context
-                .contact_pair(
-                    projectile_entity,
-                    asteroid_duplicate.unwrap_or(asteroid_entity),
-                )
-                .expect("No contact found for projectile-asteroid collision");
-            if !contact.has_any_active_contacts() {
+
+            let Some((collision_position, collision_direction)) = contact_position_and_normal(
+                &rapier_context,
+                projectile_entity,
+                asteroid_duplicate.unwrap_or(asteroid_entity),
+            ) else {
                 continue;
-            }
-            let (contact_manifold, contact) = contact
-                .find_deepest_contact()
-                .expect("No contact point found for projectile-asteroid collision");
+            };
 
             let mut velocity = velocity.copied().unwrap_or_else(Velocity::zero);
             velocity.linvel -=
@@ -146,35 +140,9 @@ fn projectile_asteroid_collision(
 
             split_asteroid_events.send(SplitAsteroidEvent {
                 asteroid_entity,
-                collision_direction: contact_manifold.normal(),
-                collision_position: contact.local_p2(),
+                collision_direction,
+                collision_position,
             });
-        }
-    }
-}
-
-fn get_original_entities(
-    duplicate_query: &Query<&Duplicate, ()>,
-    entity_a: &Entity,
-) -> (Entity, Option<Entity>) {
-    if let Ok(Duplicate { original }) = duplicate_query.get(*entity_a) {
-        (*original, Some(*entity_a))
-    } else {
-        (*entity_a, None)
-    }
-}
-
-const EXPLOSION_DURATION: f32 = 0.25;
-
-#[derive(Component)]
-pub struct Explosion {
-    pub lifetime: Timer,
-}
-
-impl Default for Explosion {
-    fn default() -> Self {
-        Self {
-            lifetime: Timer::from_seconds(EXPLOSION_DURATION, TimerMode::Once),
         }
     }
 }
@@ -190,49 +158,13 @@ fn projectile_explosion(
         let transform = transform_query
             .get(event.projectile_entity)
             .expect("Projectile transform not found");
-        spawn_explosion(&mut commands, &mut meshes, &mut materials, transform);
+        spawn_explosion(
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            transform,
+            PROJECTILE_RADIUS,
+        );
         commands.entity(event.projectile_entity).despawn_recursive();
-    }
-}
-
-fn spawn_explosion(
-    commands: &mut Commands,
-    meshes: &mut ResMut<Assets<Mesh>>,
-    materials: &mut ResMut<Assets<ColorMaterial>>,
-    transform: &Transform,
-) {
-    commands.spawn((
-        Explosion::default(),
-        MaterialMesh2dBundle {
-            transform: *transform,
-            mesh: meshes.add(Circle::new(PROJECTILE_RADIUS)).into(),
-            material: materials.add(ColorMaterial::from(Color::RED)),
-            ..default()
-        },
-    ));
-}
-
-fn explosion_expansion(
-    mut commands: Commands,
-    mut query: Query<(
-        Entity,
-        &mut Explosion,
-        &mut Transform,
-        &mut Handle<ColorMaterial>,
-    )>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
-    time: Res<Time>,
-) {
-    for (entity, mut explosion, mut transform, material_handle) in query.iter_mut() {
-        if explosion.lifetime.tick(time.delta()).just_finished() {
-            commands.entity(entity).despawn();
-        } else {
-            let material = materials.get_mut(material_handle.id()).unwrap();
-            material
-                .color
-                .set_a(explosion.lifetime.fraction_remaining());
-
-            transform.scale *= 1.04;
-        }
     }
 }

@@ -80,7 +80,7 @@ fn spawn_player_ship(
             CollisionGroups::new(PLAYER_GROUP, PLAYER_FILTER),
         ))
         .with_children(|parent| {
-            for x in [-8., 0., 8.] {
+            for x in [-9., 0., 9.] {
                 parent.spawn((
                     Name::new("Thruster"),
                     Thruster,
@@ -90,7 +90,7 @@ fn spawn_player_ship(
                             PLAYER_SHIP_SIDE_Y - 2.,
                             -1.,
                         )),
-                        mesh: meshes.add(Mesh::from(RegularPolygon::new(5., 3))).into(),
+                        mesh: meshes.add(Mesh::from(RegularPolygon::new(6., 3))).into(),
                         material: materials.add(ColorMaterial::from(Color::RED)),
                         visibility: Visibility::Hidden,
                         ..default()

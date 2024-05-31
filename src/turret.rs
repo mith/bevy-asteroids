@@ -5,7 +5,7 @@ use bevy::{
         component::Component,
         entity::Entity,
         event::{Event, EventReader},
-        schedule::{apply_deferred, IntoSystemConfigs, SystemSet},
+        schedule::{IntoSystemConfigs, SystemSet},
         system::{Commands, Query, Res, ResMut},
     },
     math::{Vec3, Vec3Swizzles},
@@ -21,12 +21,8 @@ pub struct TurretPlugin;
 
 impl Plugin for TurretPlugin {
     fn build(&self, app: &mut App) {
-        app.add_event::<FireEvent>().add_systems(
-            Update,
-            (reload, apply_deferred, fire_projectile)
-                .chain()
-                .in_set(TurretSet),
-        );
+        app.add_event::<FireEvent>()
+            .add_systems(Update, (reload, fire_projectile).chain().in_set(TurretSet));
     }
 }
 

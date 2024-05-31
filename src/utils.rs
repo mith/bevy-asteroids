@@ -3,13 +3,13 @@ use bevy::{
         component::Component,
         entity::Entity,
         query::With,
-        system::{Commands, Query},
+        system::{Commands, Query, Res},
     },
     hierarchy::DespawnRecursiveExt,
     math::Vec2,
     render::mesh::Mesh,
 };
-use bevy_rapier2d::geometry::Collider;
+use bevy_rapier2d::{geometry::Collider, plugin::RapierContext};
 
 pub fn mesh_to_collider(mesh: &Mesh) -> Collider {
     let vertices = mesh
@@ -36,4 +36,19 @@ pub fn cleanup<T: Component>(mut commands: Commands, query: Query<Entity, With<T
     for entity in &query {
         commands.entity(entity).despawn_recursive();
     }
+}
+
+pub fn contact_position_and_normal(
+    rapier_context: &Res<RapierContext>,
+    entity_a: Entity,
+    entity_b: Entity,
+) -> Option<(Vec2, Vec2)> {
+    let contact = rapier_context.contact_pair(entity_a, entity_b)?;
+    if !contact.has_any_active_contacts() {
+        return None;
+    }
+
+    let (contact_manifold, contact_view) = contact.find_deepest_contact()?;
+
+    Some((contact_manifold.normal(), contact_view.local_p2()))
 }

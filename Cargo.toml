@@ -6,7 +6,8 @@ edition = "2021"
 
 
 [profile.release]
-lto = "thin"
+lto = true
+codegen-units = 1
 
 [profile.release-debug]
 inherits = "release"
@@ -21,7 +22,6 @@ debug-assertions = true
 opt-level = 3
 
 [dependencies]
-assert_approx_eq = "1.1.0"
 bevy_rapier2d = { version = "0.26.0", features = ["wasm-bindgen"] }
 itertools = "0.13.0"
 rand = "0.8.5"

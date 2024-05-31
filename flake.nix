@@ -89,7 +89,7 @@
 
           asteroids-web = pkgs.stdenv.mkDerivation {
             name = "asteroids-web";
-            src = ./web;
+            src = ./wasm;
             nativeBuildInputs = [
               pkgs.wasm-bindgen-cli
               pkgs.binaryen

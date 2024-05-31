@@ -1,9 +1,11 @@
 use bevy::{
+    app::{App, Plugin, Update},
     asset::Assets,
     ecs::{
         component::Component,
         entity::Entity,
         event::{Event, EventReader},
+        schedule::{apply_deferred, IntoSystemConfigs, SystemSet},
         system::{Commands, Query, Res, ResMut},
     },
     math::{Vec3, Vec3Swizzles},
@@ -13,7 +15,23 @@ use bevy::{
     transform::components::Transform,
 };
 
-use crate::projectile::{spawn_projectile, Projectile};
+use crate::projectile::spawn_projectile;
+
+pub struct TurretPlugin;
+
+impl Plugin for TurretPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_event::<FireEvent>().add_systems(
+            Update,
+            (reload, apply_deferred, fire_projectile)
+                .chain()
+                .in_set(TurretSet),
+        );
+    }
+}
+
+#[derive(SystemSet, Hash, Debug, PartialEq, Eq, Clone)]
+pub struct TurretSet;
 
 #[derive(Event, Debug, Clone, Copy)]
 pub struct FireEvent {
@@ -52,7 +70,7 @@ pub fn fire_projectile(
     reload_timer_query: Query<&ReloadTimer>,
 ) {
     for FireEvent { turret_entity } in fire_event_reader.read() {
-        if reload_timer_query.get(*turret_entity).is_ok() {
+        if reload_timer_query.contains(*turret_entity) {
             continue;
         }
         if let Some(ref mut turret_cmd) = commands.get_entity(*turret_entity) {

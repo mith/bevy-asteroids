@@ -1,4 +1,14 @@
-use bevy::{math::Vec2, render::mesh::Mesh};
+use bevy::{
+    ecs::{
+        component::Component,
+        entity::Entity,
+        query::With,
+        system::{Commands, Query},
+    },
+    hierarchy::DespawnRecursiveExt,
+    math::Vec2,
+    render::mesh::Mesh,
+};
 use bevy_rapier2d::geometry::Collider;
 
 pub fn mesh_to_collider(mesh: &Mesh) -> Collider {
@@ -21,4 +31,9 @@ pub fn mesh_to_collider(mesh: &Mesh) -> Collider {
         .map(|chunk| [chunk[0], chunk[1], chunk[2]])
         .collect::<_>();
     Collider::trimesh(vertices, indices_vec)
+}
+pub fn cleanup<T: Component>(mut commands: Commands, query: Query<Entity, With<T>>) {
+    for entity in &query {
+        commands.entity(entity).despawn_recursive();
+    }
 }

@@ -1,5 +1,5 @@
 use crate::{
-    asteroids::{Asteroid, SplitAsteroidEvent, ASTEROID_GROUP},
+    asteroid::{Asteroid, SplitAsteroidEvent, ASTEROID_GROUP},
     edge_wrap::{Duplicable, Duplicate},
     utils::mesh_to_collider,
 };
@@ -11,6 +11,29 @@ use bevy_rapier2d::{
     plugin::RapierContext,
     prelude::CollisionEvent,
 };
+
+pub struct ProjectilePlugin;
+
+impl Plugin for ProjectilePlugin {
+    fn build(&self, app: &mut App) {
+        app.add_event::<ProjectileExplosionEvent>().add_systems(
+            Update,
+            (
+                projectile_timer,
+                apply_deferred,
+                projectile_asteroid_collision,
+                projectile_explosion,
+                explosion_expansion,
+                apply_deferred,
+            )
+                .chain()
+                .after(ProjectileSet),
+        );
+    }
+}
+
+#[derive(SystemSet, Hash, Debug, PartialEq, Eq, Clone)]
+pub struct ProjectileSet;
 
 #[derive(Component)]
 pub struct Projectile {
@@ -53,7 +76,7 @@ pub fn spawn_projectile(
     ));
 }
 
-pub fn projectile_timer(
+fn projectile_timer(
     mut commands: Commands,
     mut query: Query<(Entity, &mut Projectile)>,
     time: Res<Time>,
@@ -70,7 +93,7 @@ pub struct ProjectileExplosionEvent {
     pub projectile_entity: Entity,
 }
 
-pub fn projectile_asteroid_collision(
+fn projectile_asteroid_collision(
     rapier_context: Res<RapierContext>,
     mut collision_events: EventReader<CollisionEvent>,
     projectile_query: Query<&Projectile>,
@@ -141,7 +164,7 @@ fn get_original_entities(
     }
 }
 
-const EXPLOSION_DURATION: f32 = 0.2;
+const EXPLOSION_DURATION: f32 = 0.25;
 
 #[derive(Component)]
 pub struct Explosion {
@@ -156,7 +179,7 @@ impl Default for Explosion {
     }
 }
 
-pub fn projectile_explosion(
+fn projectile_explosion(
     mut commands: Commands,
     mut events: EventReader<ProjectileExplosionEvent>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -189,7 +212,7 @@ fn spawn_explosion(
     ));
 }
 
-pub fn explosion_expansion(
+fn explosion_expansion(
     mut commands: Commands,
     mut query: Query<(
         Entity,

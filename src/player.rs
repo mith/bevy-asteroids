@@ -45,13 +45,21 @@ pub fn spawn_player(
     );
 }
 
+const PLAYER_SHIP_TIP_Y: f32 = 20.;
+const PLAYER_SHIP_SIDE_Y: f32 = -14.;
+const PLAYER_SHIP_SIDE_X: f32 = 14.;
+
 fn spawn_player_ship(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<ColorMaterial>,
     transform: Transform,
 ) {
-    let player_shape = Triangle2d::new(Vec2::new(0., 12.), Vec2::new(-8., -8.), Vec2::new(8., -8.));
+    let player_shape = Triangle2d::new(
+        Vec2::new(0., PLAYER_SHIP_TIP_Y),
+        Vec2::new(-PLAYER_SHIP_SIDE_X, PLAYER_SHIP_SIDE_Y),
+        Vec2::new(PLAYER_SHIP_SIDE_X, PLAYER_SHIP_SIDE_Y),
+    );
 
     let player_mesh = Mesh::from(player_shape);
     let collider = mesh_to_collider(&player_mesh);
@@ -72,16 +80,22 @@ fn spawn_player_ship(
             CollisionGroups::new(PLAYER_GROUP, PLAYER_FILTER),
         ))
         .with_children(|parent| {
-            parent.spawn((
-                Name::new("Thruster"),
-                Thruster,
-                MaterialMesh2dBundle {
-                    transform: Transform::from_translation(Vec3::new(0., -10., -1.)),
-                    mesh: meshes.add(Mesh::from(RegularPolygon::new(5., 3))).into(),
-                    material: materials.add(ColorMaterial::from(Color::RED)),
-                    visibility: Visibility::Hidden,
-                    ..default()
-                },
-            ));
+            for x in [-8., 0., 8.] {
+                parent.spawn((
+                    Name::new("Thruster"),
+                    Thruster,
+                    MaterialMesh2dBundle {
+                        transform: Transform::from_translation(Vec3::new(
+                            x,
+                            PLAYER_SHIP_SIDE_Y - 2.,
+                            -1.,
+                        )),
+                        mesh: meshes.add(Mesh::from(RegularPolygon::new(5., 3))).into(),
+                        material: materials.add(ColorMaterial::from(Color::RED)),
+                        visibility: Visibility::Hidden,
+                        ..default()
+                    },
+                ));
+            }
         });
 }

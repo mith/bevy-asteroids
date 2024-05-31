@@ -1,9 +1,11 @@
 use bevy::{
+    app::{App, Plugin, Update},
     asset::{Assets, Handle},
     ecs::{
         component::Component,
         entity::Entity,
         event::{Event, EventReader},
+        schedule::{apply_deferred, IntoSystemConfigs, SystemSet},
         system::{Commands, Query, Res, ResMut},
     },
     log::{error, info},
@@ -32,6 +34,22 @@ use crate::{
     split_mesh::{shatter_mesh, split_mesh, trim_mesh},
     utils::mesh_to_collider,
 };
+
+pub struct AsteroidPlugin;
+
+impl Plugin for AsteroidPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_event::<SplitAsteroidEvent>().add_systems(
+            Update,
+            (split_asteroid_event, apply_deferred, debris_lifetime)
+                .chain()
+                .in_set(AsteroidSet),
+        );
+    }
+}
+
+#[derive(SystemSet, Hash, Debug, PartialEq, Eq, Clone)]
+pub struct AsteroidSet;
 
 #[derive(Component)]
 pub struct Asteroid;
@@ -443,7 +461,7 @@ mod tests {
         math::{primitives::Rectangle, Quat},
     };
 
-    use crate::asteroids::split_asteroid;
+    use crate::asteroid::split_asteroid;
 
     use super::*;
 

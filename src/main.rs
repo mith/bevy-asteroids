@@ -1,5 +1,6 @@
-mod asteroids;
+mod asteroid;
 mod edge_wrap;
+mod game_state;
 mod input;
 mod mesh_utils;
 mod player;
@@ -7,27 +8,21 @@ mod projectile;
 mod ship;
 mod split_mesh;
 mod turret;
+mod ui;
 mod utils;
 
-use asteroids::{
-    debris_lifetime, spawn_asteroids, split_asteroid_event, Asteroid, Debris, SplitAsteroidEvent,
-};
-use bevy::{asset::AssetMetaCheck, prelude::*, sprite::Mesh2dHandle};
-use bevy_rapier2d::{
-    dynamics::Velocity,
-    prelude::{CollisionEvent, NoUserData, RapierConfiguration, RapierPhysicsPlugin},
-};
+use asteroid::{spawn_asteroids, Asteroid, AsteroidPlugin, AsteroidSet, Debris};
+use bevy::{asset::AssetMetaCheck, prelude::*};
+use bevy_rapier2d::prelude::{NoUserData, RapierConfiguration, RapierPhysicsPlugin};
 use edge_wrap::{EdgeWrapPlugin, EdgeWrapSet};
+use game_state::{GameResult, GameState};
 use input::{PlayerInputPlugin, PlayerInputSet};
 use player::{spawn_player, Player};
-use projectile::{
-    explosion_expansion, projectile_asteroid_collision, projectile_explosion, projectile_timer,
-    Projectile, ProjectileExplosionEvent,
-};
-use ship::ship_movement;
-use turret::{fire_projectile, reload, FireEvent};
-
-use crate::asteroids::spawn_shattered_mesh;
+use projectile::{Projectile, ProjectilePlugin, ProjectileSet};
+use ship::{ShipDestroyedEvent, ShipPlugin, ShipSet};
+use turret::{TurretPlugin, TurretSet};
+use ui::{FinishedScreenPlugin, StartScreenPlugin};
+use utils::cleanup;
 
 const PHYSICS_LENGTH_UNIT: f32 = 100.0;
 
@@ -62,48 +57,43 @@ fn main() {
             // RapierDebugRenderPlugin::default(),
         ))
         .init_state::<GameState>()
-        .add_plugins((EdgeWrapPlugin, PlayerInputPlugin))
+        .add_plugins((
+            EdgeWrapPlugin,
+            PlayerInputPlugin,
+            ShipPlugin,
+            TurretPlugin,
+            ProjectilePlugin,
+            AsteroidPlugin,
+            StartScreenPlugin,
+            FinishedScreenPlugin,
+        ))
         .add_systems(Startup, setup_camera)
-        .add_systems(OnEnter(GameState::Menu), show_menu_ui)
-        .add_systems(OnExit(GameState::Menu), cleanup_types!(Menu))
         .add_systems(OnEnter(GameState::Playing), spawn_player)
         .add_systems(OnEnter(GameState::Playing), spawn_asteroids)
         .add_systems(
             OnExit(GameState::Finished),
             cleanup_types!(Player, Asteroid, Debris, Projectile),
         )
-        .add_systems(OnEnter(GameState::Finished), show_game_finished)
-        .add_systems(OnExit(GameState::Finished), clear_game_result)
-        .add_systems(Update, start_game.run_if(in_state(GameState::Menu)))
-        .configure_sets(Update, (PlayerInputSet, EdgeWrapSet).chain())
-        .add_event::<FireEvent>()
-        .add_event::<ProjectileExplosionEvent>()
-        .add_event::<SplitAsteroidEvent>()
+        .configure_sets(
+            Update,
+            (
+                PlayerInputSet,
+                EdgeWrapSet,
+                ShipSet,
+                TurretSet,
+                ProjectileSet,
+                AsteroidSet,
+            )
+                .chain(),
+        )
         .add_systems(
             Update,
             (
-                reload,
-                projectile_timer,
-                apply_deferred,
-                fire_projectile,
-                projectile_asteroid_collision,
-                split_asteroid_event,
-                projectile_explosion,
-                explosion_expansion,
-                apply_deferred,
-                debris_lifetime,
-                asteroids_cleared.run_if(in_state(GameState::Playing)),
+                (player_destroyed, asteroids_cleared).run_if(in_state(GameState::Playing)),
+                restart_game.run_if(in_state(GameState::Finished)),
             )
-                .chain()
-                .after(PlayerInputSet),
-        )
-        .add_systems(
-            Update,
-            (ship_movement, apply_deferred, player_asteroid_collision)
-                .chain()
-                .after(EdgeWrapSet),
-        )
-        .add_systems(Update, restart_game.run_if(in_state(GameState::Finished)));
+                .chain(),
+        );
 
     app.run();
 }
@@ -112,56 +102,17 @@ fn setup_camera(mut commands: Commands) {
     commands.spawn(Camera2dBundle::default());
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Default, States)]
-enum GameState {
-    #[default]
-    Menu,
-    Playing,
-    Finished,
-}
-
-#[derive(Resource)]
-enum GameResult {
-    Win,
-    Lose,
-}
-
-fn player_asteroid_collision(
+fn player_destroyed(
     mut commands: Commands,
-    mut collision_events: EventReader<CollisionEvent>,
-    player_query: Query<(Entity, &Transform, Option<&Velocity>, &mut Mesh2dHandle), With<Player>>,
     mut next_gamestate: ResMut<NextState<GameState>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
+    mut ship_destroyed_events: EventReader<ShipDestroyedEvent>,
+    player_query: Query<Entity, With<Player>>,
 ) {
-    for event in collision_events.read() {
-        if let CollisionEvent::Started(entity_a, entity_b, _) = event {
-            let Some((player_entity, player_transform, player_velocity, player_mesh_handle)) =
-                player_query.get_single().ok()
-            else {
-                return;
-            };
-            if player_entity == *entity_a || player_entity == *entity_b {
-                info!("Player collided with asteroid");
-                commands.insert_resource(GameResult::Lose);
-                next_gamestate.set(GameState::Finished);
-
-                let mesh = meshes
-                    .get(&player_mesh_handle.0)
-                    .expect("Player mesh not found")
-                    .clone();
-
-                spawn_shattered_mesh(
-                    &mesh,
-                    player_transform,
-                    player_velocity.copied().unwrap_or_else(Velocity::zero),
-                    &mut commands,
-                    &mut meshes,
-                    &mut materials,
-                );
-
-                commands.entity(player_entity).despawn_recursive();
-            }
+    for _ in ship_destroyed_events.read() {
+        if player_query.is_empty() {
+            info!("Player destroyed");
+            commands.insert_resource(GameResult::Lose);
+            next_gamestate.set(GameState::Finished);
         }
     }
 }
@@ -177,118 +128,6 @@ fn asteroids_cleared(
         next_gamestate.set(GameState::Finished);
     }
 }
-
-#[derive(Component)]
-struct Menu;
-
-const FONT_PATH: &str = "fonts/TurretRoad-ExtraLight.ttf";
-
-fn show_menu_ui(mut commands: Commands, asset_server: Res<AssetServer>) {
-    commands
-        .spawn((
-            Name::new("Menu screen"),
-            Menu,
-            NodeBundle {
-                style: Style {
-                    width: Val::Percent(100.),
-                    height: Val::Percent(100.),
-                    justify_content: JustifyContent::Center,
-                    align_items: AlignItems::Center,
-                    flex_direction: FlexDirection::Column,
-                    ..default()
-                },
-                ..default()
-            },
-        ))
-        .with_children(|parent| {
-            parent.spawn((
-                Name::new("Title text"),
-                TextBundle::from_section(
-                    "Asteroids",
-                    TextStyle {
-                        font: asset_server.load(FONT_PATH),
-                        font_size: 90.,
-                        color: Color::WHITE,
-                    },
-                ),
-            ));
-            parent.spawn((
-                Name::new("Start text"),
-                TextBundle::from_section(
-                    "Press Space to start",
-                    TextStyle {
-                        font: asset_server.load(FONT_PATH),
-                        font_size: 40.,
-                        color: Color::WHITE,
-                    },
-                ),
-            ));
-        });
-}
-
-#[derive(Component)]
-struct FinishedText;
-
-fn show_game_finished(
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    game_result: Res<GameResult>,
-) {
-    commands
-        .spawn((
-            FinishedText,
-            Name::new("Finished screen"),
-            NodeBundle {
-                style: Style {
-                    width: Val::Percent(100.),
-                    height: Val::Percent(100.),
-                    justify_content: JustifyContent::Center,
-                    align_items: AlignItems::Center,
-                    flex_direction: FlexDirection::Column,
-                    ..default()
-                },
-                ..default()
-            },
-        ))
-        .with_children(|parent| {
-            parent.spawn((
-                Name::new("Game result text"),
-                TextBundle::from_section(
-                    match *game_result {
-                        GameResult::Win => "You win!",
-                        GameResult::Lose => "Game over!",
-                    },
-                    TextStyle {
-                        font: asset_server.load(FONT_PATH),
-                        font_size: 90.,
-                        color: Color::WHITE,
-                    },
-                ),
-            ));
-            parent.spawn((
-                Name::new("Restart text"),
-                TextBundle::from_section(
-                    "Press R to restart",
-                    TextStyle {
-                        font: asset_server.load(FONT_PATH),
-                        font_size: 40.,
-                        color: Color::WHITE,
-                    },
-                ),
-            ));
-        });
-}
-
-fn start_game(
-    keyboard_input: Res<ButtonInput<KeyCode>>,
-    mut next_gamestate: ResMut<NextState<GameState>>,
-) {
-    if keyboard_input.pressed(KeyCode::Space) {
-        next_gamestate.set(GameState::Playing);
-        info!("Starting game");
-    }
-}
-
 fn restart_game(
     mut commands: Commands,
     keyboard_input: Res<ButtonInput<KeyCode>>,
@@ -298,17 +137,5 @@ fn restart_game(
         commands.remove_resource::<GameResult>();
         next_gamestate.set(GameState::Playing);
         info!("Restarting game");
-    }
-}
-
-fn cleanup<T: Component>(mut commands: Commands, query: Query<Entity, With<T>>) {
-    for entity in &query {
-        commands.entity(entity).despawn_recursive();
-    }
-}
-
-fn clear_game_result(mut commands: Commands, finish_text_query: Query<Entity, With<FinishedText>>) {
-    for finished_text_entity in &finish_text_query {
-        commands.entity(finished_text_entity).despawn_recursive();
     }
 }

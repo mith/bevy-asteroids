@@ -1,6 +1,9 @@
 use bevy::prelude::*;
 use itertools::Itertools;
+use smallvec::SmallVec;
+use tracing::instrument;
 
+#[instrument(skip(mesh))]
 pub fn valid_mesh(mesh: &Mesh) -> bool {
     let vertices = mesh
         .attribute(Mesh::ATTRIBUTE_POSITION)
@@ -17,6 +20,12 @@ pub fn valid_mesh(mesh: &Mesh) -> bool {
     }
 
     if index_count % 3 != 0 {
+        return false;
+    }
+
+    let first_index = indices.iter().next().unwrap();
+
+    if indices.iter().all(|index| index == first_index) {
         return false;
     }
 
@@ -59,11 +68,9 @@ pub fn is_ccw_winded(vertices: &[Vec2], indices: &[usize; 3]) -> bool {
         vertices[indices[2]],
     );
 
-    // Calculate the vectors
     let a = v2 - v1;
     let b = v3 - v1;
 
-    // Compute the cross product z-component
     let cross_product_z = a.x * b.y - a.y * b.x;
 
     cross_product_z >= 0.0
@@ -83,18 +90,21 @@ pub fn calculate_mesh_area(mesh: &Mesh) -> f32 {
 
 pub fn calculate_area(vertices: &[[f32; 3]], indices: impl Iterator<Item = usize>) -> f32 {
     indices
-        .chunks(3)
         .into_iter()
-        .map(|chunk| {
-            let (i0, i1, i2) = chunk.collect_tuple().unwrap();
-            let v0: Vec3 = vertices[i0].into();
-            let v1: Vec3 = vertices[i1].into();
-            let v2: Vec3 = vertices[i2].into();
-            0.5 * ((v0.x * (v1.y - v2.y)) + (v1.x * (v2.y - v0.y)) + (v2.x * (v0.y - v1.y))).abs()
+        .tuples()
+        .map(|(i0, i1, i2)| {
+            let v0 = vertices[i0];
+            let v1 = vertices[i1];
+            let v2 = vertices[i2];
+            0.5 * ((v0[0] * (v1[1] - v2[1]))
+                + (v1[0] * (v2[1] - v0[1]))
+                + (v2[0] * (v0[1] - v1[1])))
+                .abs()
         })
         .sum()
 }
 
+#[instrument(skip(mesh))]
 pub fn mesh_longest_axis(mesh: &Mesh) -> Vec2 {
     let vertices = mesh
         .attribute(Mesh::ATTRIBUTE_POSITION)
@@ -102,23 +112,26 @@ pub fn mesh_longest_axis(mesh: &Mesh) -> Vec2 {
         .as_float3()
         .unwrap();
 
-    let max = vertices
-        .iter()
-        .combinations(2)
-        .filter_map(|comb| {
-            let [a, b] = [comb[0], comb[1]];
-            let va = Vec2::new(a[0], a[1]);
+    let mut max_length = 0.0;
+    let mut direction = None;
+
+    for (i, a) in vertices.iter().enumerate() {
+        let va = Vec2::new(a[0], a[1]);
+
+        for b in vertices.iter().skip(i + 1) {
             let vb = Vec2::new(b[0], b[1]);
             let diff = va - vb;
-            if diff.length() > 0.0 {
-                return Some((diff.normalize(), diff.length()));
-            }
-            None
-        })
-        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+            let length = diff.length();
 
-    if let Some((direction, _)) = max {
-        return direction;
+            if length > max_length {
+                max_length = length;
+                direction = Some(diff.normalize());
+            }
+        }
+    }
+
+    if let Some(dir) = direction {
+        return dir;
     }
 
     panic!("Mesh has no edges");

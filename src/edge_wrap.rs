@@ -449,7 +449,7 @@ mod tests {
     fn create_test_collider() -> Collider {
         let shape = RegularPolygon::new(10., 3);
 
-        mesh_to_collider(&Mesh::from(shape))
+        mesh_to_collider(&Mesh::from(shape)).expect("Failed to create collider")
     }
 
     fn create_test_transform(x: f32, y: f32, rotation: f32) -> GlobalTransform {

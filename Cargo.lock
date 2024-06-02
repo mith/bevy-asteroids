@@ -194,6 +194,8 @@ dependencies = [
  "itertools",
  "proptest",
  "rand",
+ "smallvec",
+ "tracing",
 ]
 
 [[package]]

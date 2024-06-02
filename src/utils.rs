@@ -10,28 +10,30 @@ use bevy::{
     render::mesh::Mesh,
 };
 use bevy_rapier2d::{geometry::Collider, plugin::RapierContext};
+use itertools::Itertools;
 
-pub fn mesh_to_collider(mesh: &Mesh) -> Collider {
+pub fn mesh_to_collider(mesh: &Mesh) -> Result<Collider, String> {
     let vertices = mesh
         .attribute(Mesh::ATTRIBUTE_POSITION)
-        .unwrap()
+        .ok_or("Failed to get attribute position")?
         .as_float3()
-        .unwrap()
-        .to_vec()
+        .ok_or("Failed to convert attribute to float3")?
         .iter()
-        .map(|pos| Vec2::new(pos[0], pos[1]))
-        .collect::<_>();
+        .map(|pos| Vec2::new(pos[0], pos[1])) // Ensure 2D is intended
+        .collect::<Vec<_>>();
+
     let indices_vec = mesh
         .indices()
-        .unwrap()
+        .ok_or("Failed to get indices")?
         .iter()
         .map(|i| i as u32)
-        .collect::<Vec<u32>>()
-        .chunks(3)
-        .map(|chunk| [chunk[0], chunk[1], chunk[2]])
-        .collect::<_>();
-    Collider::trimesh(vertices, indices_vec)
+        .tuples()
+        .map(|(i0, i1, i2)| [i0, i1, i2])
+        .collect::<Vec<_>>();
+
+    Ok(Collider::trimesh(vertices, indices_vec))
 }
+
 pub fn cleanup<T: Component>(mut commands: Commands, query: Query<Entity, With<T>>) {
     for entity in &query {
         commands.entity(entity).despawn_recursive();

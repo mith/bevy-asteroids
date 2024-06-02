@@ -25,6 +25,8 @@ opt-level = 3
 bevy_rapier2d = { version = "0.26.0", features = ["wasm-bindgen"] }
 itertools = "0.13.0"
 rand = "0.8.5"
+smallvec = "1.13.2"
+tracing = "0.1.40"
 
 [dependencies.bevy]
 version = "0.13"

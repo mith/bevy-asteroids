@@ -52,7 +52,7 @@ pub fn spawn_projectile(
     let projectile_shape = Circle::new(PROJECTILE_RADIUS);
 
     let projectile_mesh = Mesh::from(projectile_shape);
-    let collider = mesh_to_collider(&projectile_mesh);
+    let collider = mesh_to_collider(&projectile_mesh).expect("Failed to create collider");
     commands.spawn((
         Projectile {
             lifetime: Timer::from_seconds(PROJECTILE_LIFETIME, TimerMode::Once),

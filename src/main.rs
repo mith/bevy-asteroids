@@ -8,13 +8,14 @@ mod input;
 mod mesh_utils;
 mod player;
 mod projectile;
+mod shatter;
 mod ship;
 mod split_mesh;
 mod turret;
 mod ui;
 mod utils;
 
-use asteroid::{spawn_asteroids, Asteroid, AsteroidPlugin, AsteroidSet, Debris};
+use asteroid::{spawn_asteroids, Asteroid, AsteroidPlugin, AsteroidSet};
 use bevy::{asset::AssetMetaCheck, prelude::*};
 use bevy_rapier2d::prelude::{NoUserData, RapierConfiguration, RapierPhysicsPlugin};
 use edge_wrap::{EdgeWrapPlugin, EdgeWrapSet};
@@ -23,6 +24,7 @@ use game_state::{GameResult, GameState};
 use input::{PlayerInputPlugin, PlayerInputSet};
 use player::{spawn_player, Player};
 use projectile::{Projectile, ProjectilePlugin, ProjectileSet};
+use shatter::{Debris, ShatterPlugin, ShatterSet};
 use ship::{ShipDestroyedEvent, ShipPlugin, ShipSet};
 use turret::{TurretPlugin, TurretSet};
 use ui::{FinishedScreenPlugin, StartScreenPlugin};
@@ -70,6 +72,7 @@ fn main() {
             ProjectilePlugin,
             ExplosionPlugin,
             AsteroidPlugin,
+            ShatterPlugin,
             StartScreenPlugin,
             FinishedScreenPlugin,
         ))
@@ -88,17 +91,24 @@ fn main() {
                 EdgeWrapSet,
                 TurretSet,
                 ProjectileSet,
-                (ExplosionSet, AsteroidSet),
+                (
+                    ExplosionSet,
+                    (AsteroidSet, (ShatterSet, GameFlowSet)).chain(),
+                ),
             )
                 .chain(),
         )
         .add_systems(
             Update,
-            ((player_destroyed, asteroids_cleared).run_if(in_state(GameState::Playing)),).chain(),
+            ((player_destroyed, asteroids_cleared).run_if(in_state(GameState::Playing)))
+                .in_set(GameFlowSet),
         );
 
     app.run();
 }
+
+#[derive(SystemSet, Hash, Debug, PartialEq, Eq, Clone)]
+struct GameFlowSet;
 
 fn setup_camera(mut commands: Commands) {
     commands.spawn(Camera2dBundle::default());

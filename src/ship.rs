@@ -11,7 +11,7 @@ use bevy::{
         system::{Commands, EntityCommand, EntityCommands, Query, Res, ResMut},
         world::{Mut, World},
     },
-    hierarchy::{BuildChildren, BuildWorldChildren, Children, DespawnRecursiveExt},
+    hierarchy::{BuildWorldChildren, Children, DespawnRecursiveExt},
     log::{info, warn},
     math::{
         primitives::{RegularPolygon, Triangle2d},
@@ -31,9 +31,10 @@ use bevy_rapier2d::{
 };
 
 use crate::{
-    asteroid::{spawn_shattered_mesh, Asteroid, SplitAsteroidEvent},
+    asteroid::{Asteroid, SplitAsteroidEvent},
     edge_wrap::Duplicable,
     explosion::spawn_explosion,
+    shatter::spawn_shattered_mesh,
     utils::{contact_position_and_normal, mesh_to_collider},
 };
 
@@ -79,7 +80,7 @@ impl EntityCommand for SpawnShip {
                     Vec2::new(SHIP_SIDE_X, SHIP_SIDE_Y),
                 ));
 
-                let collider = mesh_to_collider(&mesh);
+                let collider = mesh_to_collider(&mesh).expect("Failed to create collider");
                 (meshes.add(mesh), collider)
             });
 

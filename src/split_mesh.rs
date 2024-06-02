@@ -8,17 +8,20 @@ use bevy::{
 };
 use itertools::Itertools;
 use rand::seq::IteratorRandom;
+use smallvec::SmallVec;
+use tracing::instrument;
 
 use crate::mesh_utils::{
     calculate_mesh_area, distance_to_plane, ensure_ccw, get_intersection_points_2d,
     mesh_longest_axis, valid_mesh,
 };
 
+#[instrument(skip(mesh, split_plane_direction, plane_point))]
 pub fn split_mesh(
     mesh: &Mesh,
     split_plane_direction: Vec2,
     plane_point: Vec2,
-) -> [(Mesh, Vec2); 2] {
+) -> [Option<(Mesh, Vec2)>; 2] {
     let vertices = mesh
         .attribute(Mesh::ATTRIBUTE_POSITION)
         .unwrap()
@@ -29,15 +32,19 @@ pub fn split_mesh(
     let plane = Plane2d::new(impact_normal);
     let mut side_a_indices = Vec::new();
     let mut side_b_indices = Vec::new();
-    let mut side_a_vertex: Vec<Vec2> = vertices.iter().map(|v| Vec2::new(v[0], v[1])).collect();
-    let mut side_b_vertex: Vec<Vec2> = vertices.iter().map(|v| Vec2::new(v[0], v[1])).collect();
+    let mut side_a_vertex = vertices.iter().map(|v| Vec2::new(v[0], v[1])).collect_vec();
+    let mut side_b_vertex = side_a_vertex.clone();
+
+    let vertex_classifications = vertices
+        .iter()
+        .map(|vertex| distance_to_plane(Vec2::new(vertex[0], vertex[1]), plane, plane_point) > 0.0)
+        .collect_vec();
     for chunk in &indices.iter().chunks(3) {
-        let mut side_a = Vec::new();
-        let mut side_b = Vec::new();
+        let mut side_a: SmallVec<[_; 3]> = SmallVec::new();
+        let mut side_b: SmallVec<[_; 3]> = SmallVec::new();
 
         for index in chunk {
-            let vertex = Vec2::new(vertices[index][0], vertices[index][1]);
-            if distance_to_plane(vertex, plane, plane_point) > 0.0 {
+            if vertex_classifications[index] {
                 side_a.push(index);
             } else {
                 side_b.push(index);
@@ -80,21 +87,29 @@ pub fn split_mesh(
     }
 
     [
-        (&side_a_vertex, &side_a_indices),
-        (&side_b_vertex, &side_b_indices),
+        (&mut side_a_vertex, &mut side_a_indices),
+        (&mut side_b_vertex, &mut side_b_indices),
     ]
     .map(|(vertices, indices)| {
-        let (mut cleaned_vertices, mut cleaned_indices) = remove_unused_vertices(vertices, indices);
-        deduplicate_vertices(&mut cleaned_vertices, &mut cleaned_indices);
-        let offset = recenter_mesh(&mut cleaned_vertices);
+        if vertices.is_empty() || indices.is_empty() {
+            return None;
+        }
+        remove_unused_vertices(vertices, indices);
+        merge_vertices(vertices, indices);
+        let offset = recenter_mesh(vertices);
 
-        let mesh = create_mesh_2d(&cleaned_vertices, &cleaned_indices);
+        let mesh = create_mesh_2d(vertices, indices);
 
-        (mesh, offset)
+        if valid_mesh(&mesh) {
+            Some((mesh, offset))
+        } else {
+            None
+        }
     })
 }
 
-pub fn trim_mesh(mesh: &Mesh) -> ((Mesh, Vec2), Vec<(Mesh, Vec2)>) {
+#[instrument(skip(mesh))]
+pub fn trim_mesh(mesh: Mesh) -> ((Mesh, Vec2), Vec<(Mesh, Vec2)>) {
     let mut main_mesh = mesh.clone();
     let mut offset = Vec2::ZERO;
 
@@ -122,10 +137,12 @@ pub fn trim_mesh(mesh: &Mesh) -> ((Mesh, Vec2), Vec<(Mesh, Vec2)>) {
 
         let normal = Vec2::new(-vertex_direction.y, vertex_direction.x);
 
-        let [(mesh_a, offset_a), (mesh_b, offset_b)] =
-            split_mesh(&main_mesh, normal, vertex_position);
+        let [Some((mesh_a, offset_a)), trim] = split_mesh(&main_mesh, normal, vertex_position)
+        else {
+            unreachable!("Mesh should be valid");
+        };
 
-        if valid_mesh(&mesh_b) {
+        if let Some((mesh_b, offset_b)) = trim {
             shards.push((mesh_b, offset + offset_b));
         }
 
@@ -136,57 +153,32 @@ pub fn trim_mesh(mesh: &Mesh) -> ((Mesh, Vec2), Vec<(Mesh, Vec2)>) {
     ((main_mesh, offset), shards)
 }
 
+const SHATTER_MAX_RECURSION_DEPTH: u32 = 3;
+
+#[instrument(skip(mesh))]
 pub fn shatter_mesh(mesh: &Mesh, max_shard_area: f32) -> Vec<(Mesh, Vec2)> {
-    recursive_split(mesh, Vec2::ZERO, max_shard_area, 0)
-}
+    let mut result = Vec::new();
+    let mut queue = vec![(mesh.clone(), Vec2::ZERO, 0)];
 
-const SHATTER_MAX_RECURSION_DEPTH: u32 = 2;
+    while let Some((current_mesh, current_offset, depth)) = queue.pop() {
+        if depth > SHATTER_MAX_RECURSION_DEPTH
+            || calculate_mesh_area(&current_mesh) <= max_shard_area
+        {
+            result.push((current_mesh, current_offset));
+            continue;
+        }
 
-fn recursive_split(
-    mesh: &Mesh,
-    offset: Vec2,
-    max_shard_area: f32,
-    depth: u32,
-) -> Vec<(Mesh, Vec2)> {
-    let longest_axis = mesh_longest_axis(mesh);
-    let direction = Vec2::new(-longest_axis.y, longest_axis.x).normalize();
-    let [(mesh_a, offset_a), (mesh_b, offset_b)] = split_mesh(mesh, direction, Vec2::ZERO);
+        let longest_axis = mesh_longest_axis(&current_mesh);
+        let direction = Vec2::new(-longest_axis.y, longest_axis.x).normalize();
+        let halves = split_mesh(&current_mesh, direction, Vec2::ZERO);
 
-    let global_offset_a = offset + offset_a;
-    let global_offset_b = offset + offset_b;
-    if depth > SHATTER_MAX_RECURSION_DEPTH {
-        warn!("Reached maximum recursion depth");
-        return vec![(mesh_a, global_offset_a), (mesh_b, global_offset_b)];
-    }
-    let mut shards = Vec::new();
-
-    let area_a = calculate_mesh_area(&mesh_a);
-
-    if area_a > max_shard_area {
-        shards.extend(recursive_split(
-            &mesh_a,
-            global_offset_a,
-            max_shard_area,
-            depth + 1,
-        ));
-    } else {
-        shards.push((mesh_a, global_offset_a));
+        for (half_mesh, half_offset) in halves.into_iter().flatten() {
+            let global_offset = current_offset + half_offset;
+            queue.push((half_mesh, global_offset, depth + 1));
+        }
     }
 
-    let area_b = calculate_mesh_area(&mesh_b);
-
-    if area_b > max_shard_area {
-        shards.extend(recursive_split(
-            &mesh_b,
-            global_offset_b,
-            max_shard_area,
-            depth + 1,
-        ));
-    } else {
-        shards.push((mesh_b, global_offset_b));
-    }
-
-    shards
+    result
 }
 
 fn split_triangle(
@@ -242,73 +234,78 @@ fn create_mesh_2d(vertices: &[Vec2], indices: &[[usize; 3]]) -> Mesh {
         Mesh::ATTRIBUTE_POSITION,
         vertices.iter().map(|v| [v.x, v.y, 0.]).collect_vec(),
     );
-    mesh.insert_indices(Indices::U32(
+    mesh.insert_indices(Indices::U16(
         indices
             .iter()
-            .flat_map(|&[a, b, c]| [a as u32, b as u32, c as u32])
+            .flat_map(|&[a, b, c]| [a as u16, b as u16, c as u16])
             .collect_vec(),
     ));
     mesh
 }
 
-fn remove_unused_vertices(
-    vertices: &[Vec2],
-    indices: &[[usize; 3]],
-) -> (Vec<Vec2>, Vec<[usize; 3]>) {
-    let mut used_vertices = HashSet::new();
-    for index_triplet in indices {
-        for &index in index_triplet {
-            used_vertices.insert(index);
-        }
-    }
-
-    let mut old_to_new = vec![None; vertices.len()];
-    let mut new_vertices = Vec::new();
-    let mut new_index = 0;
-
-    for (old_index, vertex) in vertices.iter().enumerate() {
-        if used_vertices.contains(&old_index) {
-            old_to_new[old_index] = Some(new_index);
-            new_vertices.push(*vertex);
-            new_index += 1;
-        }
-    }
-
-    let new_indices: Vec<[usize; 3]> = indices
+#[instrument(skip(vertices, indices))]
+fn remove_unused_vertices(vertices: &mut Vec<Vec2>, indices: &mut [[usize; 3]]) {
+    let used_vertices: HashSet<usize> = indices
         .iter()
-        .map(|&[a, b, c]| {
-            [
-                old_to_new[a].unwrap(),
-                old_to_new[b].unwrap(),
-                old_to_new[c].unwrap(),
-            ]
-        })
+        .flat_map(|&[a, b, c]| vec![a, b, c])
         .collect();
 
-    (new_vertices, new_indices)
+    let mut old_to_new = vec![None; vertices.len()];
+
+    let mut new_index = 0;
+    let mut old_index = 0;
+
+    vertices.retain(|_| {
+        let current_index = old_index;
+        old_index += 1;
+        if used_vertices.contains(&current_index) {
+            old_to_new[current_index] = Some(new_index);
+            new_index += 1;
+            true
+        } else {
+            false
+        }
+    });
+
+    for index_triplet in indices.iter_mut() {
+        *index_triplet = [
+            old_to_new[index_triplet[0]].unwrap(),
+            old_to_new[index_triplet[1]].unwrap(),
+            old_to_new[index_triplet[2]].unwrap(),
+        ];
+    }
 }
 
-fn deduplicate_vertices(vertices: &mut Vec<Vec2>, indices: &mut [[usize; 3]]) {
+#[instrument(skip(vertices, indices))]
+fn merge_vertices(vertices: &mut Vec<Vec2>, indices: &mut Vec<[usize; 3]>) {
     let mut new_indices = vec![0; vertices.len()];
 
     let mut unique_vertices = Vec::new();
 
-    for (index, vertex) in vertices.iter().enumerate() {
-        if let Some(existing_index) = unique_vertices.iter().position(|v| v == vertex) {
+    for (index, &vertex) in vertices.iter().enumerate() {
+        if let Some(existing_index) = unique_vertices
+            .iter()
+            .position(|v: &Vec2| v.abs_diff_eq(vertex, 0.5))
+        {
             new_indices[index] = existing_index;
         } else {
             new_indices[index] = unique_vertices.len();
-            unique_vertices.push(*vertex);
+            unique_vertices.push(vertex);
         }
     }
 
+    let mut filtered_indices = Vec::new();
     for index in indices.iter_mut() {
-        for vertex_index in index.iter_mut() {
-            *vertex_index = new_indices[*vertex_index];
+        let [a, b, c] = *index;
+        let new_index = [new_indices[a], new_indices[b], new_indices[c]];
+        let same_index = new_index[0] == new_index[1] && new_index[1] == new_index[2];
+        if !same_index {
+            filtered_indices.push(new_index);
         }
     }
 
     *vertices = unique_vertices;
+    *indices = filtered_indices;
 }
 
 fn vertices_center(vertices: &[Vec2]) -> Vec2 {
@@ -352,8 +349,8 @@ mod tests {
 
         let mut indices_a = vec![];
         let mut indices_b = vec![];
-        let mut side_a_vertex: Vec<Vec2> = vertices.iter().map(|v| Vec2::new(v[0], v[1])).collect();
-        let mut side_b_vertex: Vec<Vec2> = vertices.iter().map(|v| Vec2::new(v[0], v[1])).collect();
+        let mut side_a_vertex = vertices.iter().map(|v| Vec2::new(v[0], v[1])).collect_vec();
+        let mut side_b_vertex = side_a_vertex.clone();
 
         split_triangle(
             plane,
@@ -408,8 +405,11 @@ mod tests {
         let split_direction = Vec2::new(0.0, 1.0);
 
         // Split the mesh
-        let [(mesh_a, offset_a), (_mesh_b, _offset_b)] =
-            split_mesh(&mesh, split_direction, Vec2::ZERO);
+        let [Some((mesh_a, offset_a)), Some((_mesh_b, _offset_b))] =
+            split_mesh(&mesh, split_direction, Vec2::ZERO)
+        else {
+            unreachable!("Mesh should be valid");
+        };
 
         // Validate the results
         // mesh_a should be the right half of the rectangle
@@ -470,6 +470,6 @@ mod tests {
         ]));
 
         // Trim the mesh
-        let ((_main_mesh, _offset), _shards) = trim_mesh(&mesh);
+        let ((_main_mesh, _offset), _shards) = trim_mesh(mesh);
     }
 }

@@ -1,33 +1,40 @@
 use bevy::{
     app::{App, Plugin, Update},
     asset::{Assets, Handle},
+    core::Name,
     ecs::{
         component::Component,
         entity::Entity,
         event::{Event, EventReader, EventWriter},
         query::With,
         schedule::{IntoSystemConfigs, SystemSet},
-        system::{Commands, Query, Res, ResMut},
+        system::{Commands, EntityCommand, EntityCommands, Query, Res, ResMut},
+        world::{Mut, World},
     },
-    hierarchy::{Children, DespawnRecursiveExt},
-    log::info,
-    math::{FloatExt, Vec3, Vec3Swizzles},
-    render::{mesh::Mesh, view::Visibility},
-    sprite::{ColorMaterial, Mesh2dHandle},
+    hierarchy::{BuildChildren, BuildWorldChildren, Children, DespawnRecursiveExt},
+    log::{info, warn},
+    math::{
+        primitives::{RegularPolygon, Triangle2d},
+        FloatExt, Vec2, Vec3, Vec3Swizzles,
+    },
+    render::{color::Color, mesh::Mesh, view::Visibility},
+    sprite::{ColorMaterial, MaterialMesh2dBundle, Mesh2dHandle},
     time::Time,
     transform::components::Transform,
     utils::default,
 };
 use bevy_rapier2d::{
-    dynamics::{ExternalImpulse, Velocity},
+    dynamics::{ExternalImpulse, RigidBody, Velocity},
+    geometry::{CollisionGroups, Group},
     plugin::RapierContext,
     prelude::CollisionEvent,
 };
 
 use crate::{
     asteroid::{spawn_shattered_mesh, Asteroid, SplitAsteroidEvent},
+    edge_wrap::Duplicable,
     explosion::spawn_explosion,
-    utils::contact_position_and_normal,
+    utils::{contact_position_and_normal, mesh_to_collider},
 };
 
 pub struct ShipPlugin;
@@ -36,7 +43,7 @@ impl Plugin for ShipPlugin {
     fn build(&self, app: &mut App) {
         app.add_event::<ShipDestroyedEvent>().add_systems(
             Update,
-            (ship_movement, ship_asteroid_collision)
+            (ship_movement, ship_asteroid_collision, explode_ship)
                 .chain()
                 .in_set(ShipSet),
         );
@@ -51,6 +58,95 @@ pub struct Ship;
 
 #[derive(Component)]
 pub struct Thruster;
+
+pub const SHIP_GROUP: Group = Group::GROUP_1;
+pub const SHIP_FILTER: Group = Group::ALL;
+const SHIP_TIP_Y: f32 = 20.;
+const SHIP_SIDE_Y: f32 = -14.;
+const SHIP_SIDE_X: f32 = 14.;
+
+struct SpawnShip {
+    transform: Transform,
+}
+
+impl EntityCommand for SpawnShip {
+    fn apply(self, entity: Entity, world: &mut World) {
+        let (ship_mesh_handle, collider) =
+            world.resource_scope(|_world, mut meshes: Mut<Assets<Mesh>>| {
+                let mesh = Mesh::from(Triangle2d::new(
+                    Vec2::new(0., SHIP_TIP_Y),
+                    Vec2::new(-SHIP_SIDE_X, SHIP_SIDE_Y),
+                    Vec2::new(SHIP_SIDE_X, SHIP_SIDE_Y),
+                ));
+
+                let collider = mesh_to_collider(&mesh);
+                (meshes.add(mesh), collider)
+            });
+
+        let ship_material_handle =
+            world.resource_scope(|_world, mut materials: Mut<Assets<ColorMaterial>>| {
+                materials.add(ColorMaterial::from(Color::WHITE))
+            });
+
+        let thruster_mesh_handle: Mesh2dHandle = world
+            .resource_scope(|_world, mut meshes: Mut<Assets<Mesh>>| {
+                meshes.add(Mesh::from(RegularPolygon::new(6., 3)))
+            })
+            .into();
+
+        let thruster_material_handle =
+            world.resource_scope(|_world, mut materials: Mut<Assets<ColorMaterial>>| {
+                materials.add(ColorMaterial::from(Color::RED))
+            });
+
+        world
+            .entity_mut(entity)
+            .insert((
+                Ship,
+                MaterialMesh2dBundle {
+                    mesh: ship_mesh_handle.into(),
+                    material: ship_material_handle,
+                    transform: self.transform,
+                    ..default()
+                },
+                RigidBody::Dynamic,
+                collider,
+                Duplicable,
+                CollisionGroups::new(SHIP_GROUP, SHIP_FILTER),
+            ))
+            .with_children(|parent| {
+                for x in [-9., 0., 9.] {
+                    parent.spawn((
+                        Name::new("Thruster"),
+                        Thruster,
+                        MaterialMesh2dBundle {
+                            transform: Transform::from_translation(Vec3::new(
+                                x,
+                                SHIP_SIDE_Y - 2.,
+                                -1.,
+                            )),
+                            mesh: thruster_mesh_handle.clone(),
+                            material: thruster_material_handle.clone(),
+                            visibility: Visibility::Hidden,
+                            ..default()
+                        },
+                    ));
+                }
+            });
+    }
+}
+
+pub trait SpawnShipExt {
+    fn spawn_ship(&mut self, transform: Transform) -> EntityCommands;
+}
+
+impl<'w, 's> SpawnShipExt for Commands<'w, 's> {
+    fn spawn_ship(&mut self, transform: Transform) -> EntityCommands {
+        let mut e = self.spawn_empty();
+        e.add(SpawnShip { transform });
+        e
+    }
+}
 
 #[derive(Component)]
 pub struct Throttling;
@@ -138,78 +234,75 @@ pub struct ShipDestroyedEvent {
 }
 
 fn ship_asteroid_collision(
-    mut commands: Commands,
     rapier_context: Res<RapierContext>,
     mut collision_events: EventReader<CollisionEvent>,
-    ship_query: Query<(Entity, &Transform, Option<&Velocity>, &mut Mesh2dHandle), With<Ship>>,
-    asteroid_query: Query<&Asteroid>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
+    ship_query: Query<(&Transform, Option<&Velocity>, &mut Mesh2dHandle), With<Ship>>,
+    asteroid_query: Query<Entity, With<Asteroid>>,
     mut ship_destroyed_events: EventWriter<ShipDestroyedEvent>,
     mut split_asteroid_events: EventWriter<SplitAsteroidEvent>,
 ) {
     for event in collision_events.read() {
         if let CollisionEvent::Started(entity_a, entity_b, _) = event {
-            let Ok((player_entity, player_transform, player_velocity, player_mesh_handle)) =
-                ship_query.get_single()
-            else {
-                return;
-            };
-            if player_entity == *entity_a || player_entity == *entity_b {
-                info!("Ship collided with asteroid");
-
-                let mesh = meshes
-                    .get(&player_mesh_handle.0)
-                    .expect("Ship mesh not found")
-                    .clone();
-
-                spawn_shattered_mesh(
-                    &mesh,
-                    player_transform,
-                    player_velocity.copied().unwrap_or_else(Velocity::zero),
-                    &mut commands,
-                    &mut meshes,
-                    &mut materials,
-                );
-
-                commands.entity(player_entity).despawn_recursive();
-
-                ship_destroyed_events.send(ShipDestroyedEvent {
-                    ship_entity: player_entity,
-                });
-
-                spawn_explosion(
-                    &mut commands,
-                    &mut meshes,
-                    &mut materials,
-                    player_transform,
-                    6.,
-                );
-
-                if let Some(asteroid_entity) = if *entity_a == player_entity {
-                    Some(*entity_b)
-                } else if *entity_b == player_entity {
-                    Some(*entity_a)
+            let (ship_entity, asteroid_entity) =
+                if ship_query.contains(*entity_a) && asteroid_query.contains(*entity_b) {
+                    (*entity_a, *entity_b)
+                } else if ship_query.contains(*entity_b) && asteroid_query.contains(*entity_a) {
+                    (*entity_b, *entity_a)
                 } else {
-                    None
-                } {
-                    let Some((collision_position, collision_direction)) =
-                        contact_position_and_normal(
-                            &rapier_context,
-                            player_entity,
-                            asteroid_entity,
-                        )
-                    else {
-                        continue;
-                    };
+                    continue;
+                };
+            info!("Ship collided with asteroid");
 
-                    split_asteroid_events.send(SplitAsteroidEvent {
-                        asteroid_entity,
-                        collision_direction,
-                        collision_position,
-                    });
-                }
-            }
+            ship_destroyed_events.send(ShipDestroyedEvent { ship_entity });
+
+            let Some((collision_position, collision_direction)) =
+                contact_position_and_normal(&rapier_context, ship_entity, asteroid_entity)
+            else {
+                warn!("No collision position found");
+                continue;
+            };
+
+            split_asteroid_events.send(SplitAsteroidEvent {
+                asteroid_entity,
+                collision_direction,
+                collision_position,
+            });
         }
+    }
+}
+
+fn explode_ship(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    mut ship_destroyed_events: EventReader<ShipDestroyedEvent>,
+    ship_query: Query<(&Transform, Option<&Velocity>, &mut Mesh2dHandle), With<Ship>>,
+) {
+    for ShipDestroyedEvent { ship_entity } in ship_destroyed_events.read() {
+        let (ship_transform, ship_velocity, ship_mesh_handle) =
+            ship_query.get(*ship_entity).unwrap();
+
+        let mesh = meshes
+            .get(&ship_mesh_handle.0)
+            .expect("Ship mesh not found")
+            .clone();
+
+        spawn_shattered_mesh(
+            &mesh,
+            ship_transform,
+            ship_velocity.copied().unwrap_or_else(Velocity::zero),
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+        );
+        spawn_explosion(
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            ship_transform,
+            6.,
+        );
+
+        commands.entity(*ship_entity).despawn_recursive();
     }
 }

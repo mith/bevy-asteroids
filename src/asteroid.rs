@@ -2,17 +2,17 @@ use bevy::{
     app::{App, Plugin, Update},
     asset::{Assets, Handle},
     ecs::{
+        bundle::Bundle,
         component::Component,
         entity::Entity,
         event::{Event, EventReader},
         schedule::{IntoSystemConfigs, SystemSet},
-        system::{Commands, Query, Res, ResMut},
+        system::{Command, Commands, EntityCommand, EntityCommands, Query, Res, ResMut},
+        world::Mut,
     },
     log::{error, info},
-    math::{
-        primitives::{Rectangle, RegularPolygon},
-        Vec2, Vec3, Vec3Swizzles,
-    },
+    math::{primitives::RegularPolygon, Vec2, Vec3, Vec3Swizzles},
+    prelude::World,
     render::{
         color::Color,
         mesh::{Mesh, VertexAttributeValues},
@@ -26,6 +26,7 @@ use bevy_rapier2d::{
     dynamics::{RigidBody, Sleeping, Velocity},
     geometry::{ActiveEvents, CollisionGroups, Group, Restitution},
 };
+use itertools::Itertools;
 use rand::{rngs::ThreadRng, Rng};
 
 use crate::{
@@ -60,97 +61,97 @@ const ASTEROID_MAX_SPAWN_LIN_VELOCITY: f32 = 50.;
 const ASTEROID_MAX_SPAWN_ANG_VELOCITY: f32 = 1.;
 const ASTEROID_SPAWN_CIRCUMRADIUS: f32 = 50.;
 
-pub const RECTANGULAR_ASTEROIDS: bool = false;
-pub const FROZEN_ASTEROIDS: bool = false;
+pub const ASTEROID_GROUP: Group = Group::GROUP_3;
 
-pub fn spawn_asteroids(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
-    bounds: Res<Bounds>,
-) {
+pub fn spawn_asteroids(mut commands: Commands, bounds: Res<Bounds>) {
     // Divide bounds area by approximate asteroid area to get a rough estimate of how many asteroids to spawn
     let asteroid_spawn_count = (((bounds.0.x * bounds.0.y) as usize
         / (ASTEROID_SPAWN_CIRCUMRADIUS * ASTEROID_SPAWN_CIRCUMRADIUS) as usize)
         / 10)
         .clamp(2, 10);
     info!(bounds= ?bounds, number= ?asteroid_spawn_count, "Spawning asteroids");
-    let mut asteroid_positions: Vec<Vec2> = Vec::new();
-    while asteroid_positions.len() < asteroid_spawn_count {
-        let mut rng = rand::thread_rng();
-        let max_x = bounds.0.x;
-        let max_y = bounds.0.y;
-        let asteroid_pos = Vec2::new(rng.gen_range(-max_x..max_x), rng.gen_range(-max_y..max_y));
+    let mut rng = rand::thread_rng();
+    let asteroid_positions: Vec<Vec2> = (0..asteroid_spawn_count)
+        .map(|_| {
+            Vec2::new(
+                rng.gen_range(-bounds.0.x..bounds.0.x),
+                rng.gen_range(-bounds.0.y..bounds.0.y),
+            )
+        })
+        .filter(|position| position.length() > 150.)
+        .fold(Vec::new(), |mut acc, position| {
+            if acc.iter().all(|&pos| (pos - position).length() > 150.) {
+                acc.push(position);
+            }
+            acc
+        });
+    commands.spawn_asteroid_batch(asteroid_positions);
+}
 
-        // skip spawning asteroids on top of player
-        if asteroid_pos.length() < 150. {
-            continue;
-        }
+struct SpawnAsteroid {
+    position: Vec2,
+}
 
-        // skip spawning asteroids on top of other asteroids
-        if asteroid_positions
-            .iter()
-            .any(|&pos| (pos - asteroid_pos).length() < 150.)
-        {
-            continue;
-        }
-
-        asteroid_positions.push(asteroid_pos);
-
-        spawn_asteroid(
-            rng,
-            &mut commands,
-            asteroid_pos,
-            &mut meshes,
-            &mut materials,
+impl EntityCommand for SpawnAsteroid {
+    fn apply(self, entity: Entity, world: &mut World) {
+        let mut rng = ThreadRng::default();
+        let asteroid_pos = self.position;
+        let asteroid_velocity = Vec2::new(
+            rng.gen_range(-ASTEROID_MAX_SPAWN_LIN_VELOCITY..ASTEROID_MAX_SPAWN_LIN_VELOCITY),
+            rng.gen_range(-ASTEROID_MAX_SPAWN_LIN_VELOCITY..ASTEROID_MAX_SPAWN_LIN_VELOCITY),
         );
+        let asteroid_angular_velocity =
+            rng.gen_range(-ASTEROID_MAX_SPAWN_ANG_VELOCITY..ASTEROID_MAX_SPAWN_ANG_VELOCITY);
+
+        let (asteroid_mesh_handle, collider) = world.resource_scope(|_world, mut meshes: Mut<Assets<Mesh>>| {
+            let mut mesh = Mesh::from(RegularPolygon::new(
+                ASTEROID_SPAWN_CIRCUMRADIUS,
+                ASTEROID_MAX_VERTICES,
+            ));
+
+            let pos_attributes = mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION).expect(
+            "Mesh does not have a position attribute. This should not happen as we just created the mesh",
+            );
+
+            let VertexAttributeValues::Float32x3(pos_attr_vec3) = pos_attributes else {
+                panic!("Position attribute is not a Float32x3");
+            };
+
+            pos_attr_vec3.iter_mut().for_each(|v| {
+                // Translate vertice randomly
+                v[0] += rng.gen_range(-ASTEROID_MAX_VERTICE_DRIFT..ASTEROID_MAX_VERTICE_DRIFT);
+                v[1] += rng.gen_range(-ASTEROID_MAX_VERTICE_DRIFT..ASTEROID_MAX_VERTICE_DRIFT);
+            });
+
+            let collider = mesh_to_collider(&mesh);
+            (meshes.add(mesh), collider)
+        });
+
+        let material_handle =
+            world.resource_scope(|_world, mut materials: Mut<Assets<ColorMaterial>>| {
+                materials.add(ColorMaterial::from(Color::WHITE))
+            });
+
+        world.entity_mut(entity).insert(create_asteroid_bundle(
+            asteroid_pos,
+            asteroid_mesh_handle,
+            material_handle,
+            collider,
+            asteroid_velocity,
+            asteroid_angular_velocity,
+        ));
     }
 }
 
-pub const ASTEROID_GROUP: Group = Group::GROUP_3;
-
-pub fn spawn_asteroid(
-    mut rng: rand::prelude::ThreadRng,
-    commands: &mut Commands,
+fn create_asteroid_bundle(
     asteroid_pos: Vec2,
-    meshes: &mut ResMut<Assets<Mesh>>,
-    materials: &mut ResMut<Assets<ColorMaterial>>,
-) {
-    let asteroid_velocity = Vec2::new(
-        rng.gen_range(-ASTEROID_MAX_SPAWN_LIN_VELOCITY..ASTEROID_MAX_SPAWN_LIN_VELOCITY),
-        rng.gen_range(-ASTEROID_MAX_SPAWN_LIN_VELOCITY..ASTEROID_MAX_SPAWN_LIN_VELOCITY),
-    );
-    let asteroid_angular_velocity =
-        rng.gen_range(-ASTEROID_MAX_SPAWN_ANG_VELOCITY..ASTEROID_MAX_SPAWN_ANG_VELOCITY);
-
-    let mut asteroid_mesh = if !RECTANGULAR_ASTEROIDS {
-        Mesh::from(RegularPolygon::new(
-            ASTEROID_SPAWN_CIRCUMRADIUS,
-            ASTEROID_MAX_VERTICES,
-        ))
-    } else {
-        Mesh::from(Rectangle::new(100., 100.))
-    };
-
-    if !RECTANGULAR_ASTEROIDS {
-        let pos_attributes = asteroid_mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION).expect(
-        "Mesh does not have a position attribute. This should not happen as we just created the mesh",
-        );
-
-        let VertexAttributeValues::Float32x3(pos_attr_vec3) = pos_attributes else {
-            panic!("Position attribute is not a Float32x3");
-        };
-
-        pos_attr_vec3.iter_mut().for_each(|v| {
-            // Translate vertice randomly
-            v[0] += rng.gen_range(-ASTEROID_MAX_VERTICE_DRIFT..ASTEROID_MAX_VERTICE_DRIFT);
-            v[1] += rng.gen_range(-ASTEROID_MAX_VERTICE_DRIFT..ASTEROID_MAX_VERTICE_DRIFT);
-        });
-    }
-
-    let collider = mesh_to_collider(&asteroid_mesh);
-
-    let mut asteroid_cmd = commands.spawn((
+    asteroid_mesh_handle: Handle<Mesh>,
+    material_handle: Handle<ColorMaterial>,
+    collider: bevy_rapier2d::prelude::Collider,
+    asteroid_velocity: Vec2,
+    asteroid_angular_velocity: f32,
+) -> impl Bundle {
+    (
         Asteroid,
         MaterialMesh2dBundle {
             transform: Transform::default().with_translation(Vec3::new(
@@ -158,35 +159,97 @@ pub fn spawn_asteroid(
                 asteroid_pos.y,
                 0.,
             )),
-            mesh: meshes.add(asteroid_mesh).into(),
-            material: materials.add(ColorMaterial::from(Color::WHITE)),
+            mesh: asteroid_mesh_handle.into(),
+            material: material_handle,
             ..default()
         },
         collider,
         ActiveEvents::COLLISION_EVENTS,
         Duplicable,
         CollisionGroups::new(ASTEROID_GROUP, Group::ALL),
-    ));
+        RigidBody::Dynamic,
+        Velocity {
+            linvel: asteroid_velocity,
+            angvel: asteroid_angular_velocity,
+        },
+        Restitution {
+            coefficient: 0.9,
+            ..default()
+        },
+        Sleeping {
+            normalized_linear_threshold: 0.001,
+            angular_threshold: 0.001,
+            ..default()
+        },
+    )
+}
 
-    if !FROZEN_ASTEROIDS {
-        asteroid_cmd.insert((
-            RigidBody::Dynamic,
-            Velocity {
-                linvel: asteroid_velocity,
-                angvel: asteroid_angular_velocity,
-            },
-            Restitution {
-                coefficient: 0.9,
-                ..default()
-            },
-            Sleeping {
-                normalized_linear_threshold: 0.001,
-                angular_threshold: 0.001,
-                ..default()
-            },
-        ));
-    } else {
-        asteroid_cmd.insert(RigidBody::Fixed);
+struct SpawnAsteroidBatch {
+    positions: Vec<Vec2>,
+}
+
+impl Command for SpawnAsteroidBatch {
+    fn apply(self, world: &mut World) {
+        let mut rng = ThreadRng::default();
+        let asteroid_bundles = self.positions.iter().map(|position|{
+            let velocity = Vec2::new(
+                rng.gen_range(-ASTEROID_MAX_SPAWN_LIN_VELOCITY..ASTEROID_MAX_SPAWN_LIN_VELOCITY),
+                rng.gen_range(-ASTEROID_MAX_SPAWN_LIN_VELOCITY..ASTEROID_MAX_SPAWN_LIN_VELOCITY),
+            );
+
+            let angular_velocity = rng.gen_range(-ASTEROID_MAX_SPAWN_ANG_VELOCITY..ASTEROID_MAX_SPAWN_ANG_VELOCITY);
+
+            let (asteroid_mesh_handle, collider) = world.resource_scope(|_world, mut meshes: Mut<Assets<Mesh>>| {
+                let mut mesh = Mesh::from(RegularPolygon::new(
+                    ASTEROID_SPAWN_CIRCUMRADIUS,
+                    ASTEROID_MAX_VERTICES,
+                ));
+
+                let pos_attributes = mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION).expect(
+                "Mesh does not have a position attribute. This should not happen as we just created the mesh",
+                );
+
+                let VertexAttributeValues::Float32x3(pos_attr_vec3) = pos_attributes else {
+                    panic!("Position attribute is not a Float32x3");
+                };
+
+                pos_attr_vec3.iter_mut().for_each(|v| {
+                    // Translate vertice randomly
+                    v[0] += rng.gen_range(-ASTEROID_MAX_VERTICE_DRIFT..ASTEROID_MAX_VERTICE_DRIFT);
+                    v[1] += rng.gen_range(-ASTEROID_MAX_VERTICE_DRIFT..ASTEROID_MAX_VERTICE_DRIFT);
+                });
+
+                let collider = mesh_to_collider(&mesh);
+                (meshes.add(mesh), collider)
+            });
+
+            let material_handle =
+                world.resource_scope(|_world, mut materials: Mut<Assets<ColorMaterial>>| {
+                    materials.add(ColorMaterial::from(Color::WHITE))
+                });
+
+            create_asteroid_bundle(*position, asteroid_mesh_handle, material_handle, collider, velocity, angular_velocity)
+        }).collect_vec();
+
+        world.spawn_batch(asteroid_bundles);
+    }
+}
+
+pub trait AsteroidSpawnParamExt {
+    fn spawn_asteroid(&mut self, position: Vec2) -> EntityCommands;
+
+    fn spawn_asteroid_batch(&mut self, positions: Vec<Vec2>);
+}
+
+impl<'w, 's> AsteroidSpawnParamExt for Commands<'w, 's> {
+    fn spawn_asteroid(&mut self, position: Vec2) -> EntityCommands {
+        let mut e = self.spawn_empty();
+        e.add(SpawnAsteroid { position });
+        e
+    }
+
+    fn spawn_asteroid_batch(&mut self, positions: Vec<Vec2>) {
+        self.add(SpawnAsteroidBatch { positions });
     }
 }
 
@@ -206,7 +269,7 @@ const ASTEROID_MIN_AREA: f32 = 500.;
 
 const DEBRIS_MAX_AREA: f32 = 6.;
 
-pub fn split_asteroid_event(
+fn split_asteroid_event(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
@@ -257,7 +320,8 @@ fn split_asteroid(
         split_mesh(mesh, mesh_collision_direction, collision_position);
 
     // Calculate area of the split mesh
-    // Skip spawning if the area of the split mesh is too small
+
+    let mut debris = Vec::new();
 
     let mut spawn = |mesh: &Mesh, offset: Vec2| {
         // Check if mesh contains any vertices
@@ -294,19 +358,21 @@ fn split_asteroid(
                 &main_mesh.0,
             );
         } else if mesh_area > 0. && mesh_area < ASTEROID_MIN_AREA {
-            spawn_shattered_mesh(mesh, &main_transform, velocity, commands, meshes, materials);
+            debris.push((main_transform, velocity, main_mesh.0))
         }
 
-        for (mesh, trimmed_offset) in trimmings {
+        debris.extend(trimmings.into_iter().map(|(mesh, trimmed_offset)| {
             let translation = transform.transform_point((offset + trimmed_offset).extend(0.));
             let transform =
                 Transform::from_translation(translation).with_rotation(main_transform.rotation);
-            spawn_shattered_mesh(&mesh, &transform, velocity, commands, meshes, materials)
-        }
+            (transform, velocity, mesh)
+        }));
     };
 
     spawn(&mesh_a, offset_a);
     spawn(&mesh_b, offset_b);
+
+    spawn_shattered_mesh_batch(commands, debris.into_iter(), meshes, materials);
 }
 
 pub fn spawn_shattered_mesh(
@@ -318,42 +384,79 @@ pub fn spawn_shattered_mesh(
     materials: &mut ResMut<Assets<ColorMaterial>>,
 ) {
     let mut rng = ThreadRng::default();
-    let shards = shatter_mesh(mesh, DEBRIS_MAX_AREA);
-    for (mesh, offset) in shards.iter() {
-        let shard_translation = transform.transform_point(offset.extend(0.));
-        let shard_transform =
-            Transform::from_translation(shard_translation).with_rotation(transform.rotation);
+    let shards = shatter_mesh(mesh, DEBRIS_MAX_AREA)
+        .into_iter()
+        .map(|(mesh, offset)| {
+            let shard_translation = transform.transform_point(offset.extend(0.));
+            let shard_transform =
+                Transform::from_translation(shard_translation).with_rotation(transform.rotation);
 
-        let rng_range_max = 5.;
+            let rng_range_max = 5.;
 
-        let velocity = Velocity {
-            linvel: transform
-                .rotation
-                .mul_vec3(offset.extend(0.))
-                .normalize()
-                .xy()
-                * 15.
-                + velocity.linvel
-                + Vec2::new(
-                    rng.gen_range(-rng_range_max..rng_range_max),
-                    rng.gen_range(-rng_range_max..rng_range_max),
-                ),
-            angvel: rng
-                .gen_range(-ASTEROID_MAX_SPAWN_ANG_VELOCITY..ASTEROID_MAX_SPAWN_ANG_VELOCITY),
-        };
+            let velocity = Velocity {
+                linvel: transform
+                    .rotation
+                    .mul_vec3(offset.extend(0.))
+                    .normalize()
+                    .xy()
+                    * 15.
+                    + velocity.linvel
+                    + Vec2::new(
+                        rng.gen_range(-rng_range_max..rng_range_max),
+                        rng.gen_range(-rng_range_max..rng_range_max),
+                    ),
+                angvel: rng
+                    .gen_range(-ASTEROID_MAX_SPAWN_ANG_VELOCITY..ASTEROID_MAX_SPAWN_ANG_VELOCITY),
+            };
 
-        spawn_debris(
-            commands,
-            &shard_transform,
-            velocity,
-            meshes,
-            materials,
-            mesh,
-        )
-    }
+            (shard_transform, velocity, mesh)
+        });
+
+    spawn_debris_batch(commands, shards, meshes, materials);
 }
 
-pub fn spawn_asteroid_split(
+pub fn spawn_shattered_mesh_batch(
+    commands: &mut Commands,
+    debris: impl Iterator<Item = (Transform, Velocity, Mesh)>,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<ColorMaterial>>,
+) {
+    let mut rng = ThreadRng::default();
+    let debris_bundles = debris
+        .flat_map(|(transform, velocity, mesh)| {
+            shatter_mesh(&mesh, DEBRIS_MAX_AREA)
+                .into_iter()
+                .map(move |(mesh, offset)| (transform, velocity, mesh, offset))
+        })
+        .map(move |(transform, velocity, mesh, offset)| {
+            let rng_range_max = 5.;
+
+            let shard_translation = transform.transform_point(offset.extend(0.));
+            let shard_transform =
+                Transform::from_translation(shard_translation).with_rotation(transform.rotation);
+            let velocity = Velocity {
+                linvel: transform
+                    .rotation
+                    .mul_vec3(offset.extend(0.))
+                    .normalize()
+                    .xy()
+                    * 15.
+                    + velocity.linvel
+                    + Vec2::new(
+                        rng.gen_range(-rng_range_max..rng_range_max),
+                        rng.gen_range(-rng_range_max..rng_range_max),
+                    ),
+                angvel: rng
+                    .gen_range(-ASTEROID_MAX_SPAWN_ANG_VELOCITY..ASTEROID_MAX_SPAWN_ANG_VELOCITY),
+            };
+
+            (shard_transform, velocity, mesh)
+        });
+
+    spawn_debris_batch(commands, debris_bundles, meshes, materials);
+}
+
+fn spawn_asteroid_split(
     commands: &mut Commands,
     transform: Transform,
     velocity: Velocity,
@@ -363,7 +466,7 @@ pub fn spawn_asteroid_split(
 ) {
     let collider = mesh_to_collider(mesh);
 
-    let mut asteroid_cmd = commands.spawn((
+    commands.spawn((
         Asteroid,
         MaterialMesh2dBundle {
             transform,
@@ -374,73 +477,65 @@ pub fn spawn_asteroid_split(
         collider,
         ActiveEvents::COLLISION_EVENTS,
         Duplicable,
+        RigidBody::Dynamic,
+        velocity,
+        Restitution {
+            coefficient: 0.9,
+            ..default()
+        },
+        Sleeping {
+            normalized_linear_threshold: 0.001,
+            angular_threshold: 0.001,
+            ..default()
+        },
     ));
-    if !FROZEN_ASTEROIDS {
-        asteroid_cmd.insert((
-            RigidBody::Dynamic,
-            velocity,
-            Restitution {
-                coefficient: 0.9,
-                ..default()
-            },
-            Sleeping {
-                normalized_linear_threshold: 0.001,
-                angular_threshold: 0.001,
-                ..default()
-            },
-        ));
-    } else {
-        asteroid_cmd.insert(RigidBody::Fixed);
-    }
 }
 
 pub const DEBRIS_GROUP: Group = Group::GROUP_4;
 
-pub fn spawn_debris(
+fn spawn_debris_batch(
     commands: &mut Commands,
-    transform: &Transform,
-    velocity: Velocity,
+    debris: impl Iterator<Item = (Transform, Velocity, Mesh)>,
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<ColorMaterial>>,
-    mesh: &Mesh,
 ) {
-    let collider = mesh_to_collider(mesh);
     let mut rng = ThreadRng::default();
+    let material = materials.add(ColorMaterial::from(Color::WHITE));
+    let debris_bundles = debris
+        .map(|(transform, velocity, mesh)| {
+            let collider = mesh_to_collider(&mesh);
+            (
+                Debris {
+                    lifetime: Timer::from_seconds(rng.gen_range(0.5..5.0), TimerMode::Once),
+                },
+                MaterialMesh2dBundle {
+                    transform,
+                    mesh: Mesh2dHandle(meshes.add(mesh)),
+                    material: material.clone(),
+                    ..default()
+                },
+                collider,
+                CollisionGroups::new(DEBRIS_GROUP, Group::NONE),
+                Duplicable,
+                RigidBody::Dynamic,
+                velocity,
+                Restitution {
+                    coefficient: 0.9,
+                    ..default()
+                },
+                Sleeping {
+                    normalized_linear_threshold: 0.001,
+                    angular_threshold: 0.001,
+                    ..default()
+                },
+            )
+        })
+        .collect_vec();
 
-    let mut asteroid_cmd = commands.spawn((
-        Debris {
-            lifetime: Timer::from_seconds(rng.gen_range(0.5..5.0), TimerMode::Once),
-        },
-        MaterialMesh2dBundle {
-            transform: *transform,
-            mesh: Mesh2dHandle(meshes.add(mesh.clone())),
-            material: materials.add(ColorMaterial::from(Color::WHITE)),
-            ..default()
-        },
-        collider,
-        CollisionGroups::new(DEBRIS_GROUP, Group::NONE),
-        Duplicable,
-    ));
-    if !FROZEN_ASTEROIDS {
-        asteroid_cmd.insert((
-            RigidBody::Dynamic,
-            velocity,
-            Restitution {
-                coefficient: 0.9,
-                ..default()
-            },
-            Sleeping {
-                normalized_linear_threshold: 0.001,
-                angular_threshold: 0.001,
-                ..default()
-            },
-        ));
-    } else {
-        asteroid_cmd.insert(RigidBody::Fixed);
-    }
+    commands.spawn_batch(debris_bundles);
 }
 
-pub fn debris_lifetime(
+fn debris_lifetime(
     mut commands: Commands,
     time: Res<Time>,
     mut debris_query: Query<(Entity, &mut Debris)>,

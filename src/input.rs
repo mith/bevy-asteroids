@@ -10,11 +10,11 @@ use bevy::{
         },
         system::{Commands, Query, Res},
     },
-    input::{keyboard::KeyCode, mouse::MouseButton, ButtonInput},
+    input::{mouse::MouseButton, ButtonInput},
     math::Quat,
     render::camera::Camera,
     transform::components::{GlobalTransform, Transform},
-    window::Window,
+    window::{PrimaryWindow, Window},
 };
 
 use crate::{
@@ -47,10 +47,10 @@ pub fn player_ship_input(
     mut player_query: Query<(Entity, &GlobalTransform, &mut Transform), (With<Player>, With<Ship>)>,
     camera_query: Query<(&Camera, &GlobalTransform)>,
     mut fire_projectile_event_writer: EventWriter<FireEvent>,
-    windows: Query<&Window>,
+    primary_window: Query<&Window, With<PrimaryWindow>>,
 ) {
     let (camera, camera_global_transform) = camera_query.single();
-    let Some(cursor_pos) = windows
+    let Some(cursor_pos) = primary_window
         .single()
         .cursor_position()
         .and_then(|cp| camera.viewport_to_world_2d(camera_global_transform, cp))

@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments, clippy::type_complexity)]
+
 mod asteroid;
 mod edge_wrap;
 mod explosion;
@@ -48,6 +50,7 @@ fn main() {
         .insert_resource(AssetMetaCheck::Never)
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
+                // present_mode: PresentMode::Mailbox,
                 canvas: Some("#game".to_string()),
                 ..default()
             }),

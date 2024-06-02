@@ -16,7 +16,7 @@ use bevy::{
     render::color::Color,
     sprite::{ColorMaterial, MaterialMesh2dBundle, Mesh2dHandle},
     transform::components::{GlobalTransform, Transform},
-    window::Window,
+    window::{PrimaryWindow, Window},
 };
 use bevy_rapier2d::{
     geometry::{ActiveEvents, Collider},
@@ -73,7 +73,10 @@ fn draw_bounds_gizmos(mut gizmos: Gizmos, bounds: Res<Bounds>) {
     );
 }
 
-fn sync_bounds_to_window_size(mut bounds: ResMut<Bounds>, window_query: Query<&Window>) {
+fn sync_bounds_to_window_size(
+    mut bounds: ResMut<Bounds>,
+    window_query: Query<&Window, With<PrimaryWindow>>,
+) {
     let Ok(window) = window_query.get_single() else {
         *bounds = Bounds::default();
         return;

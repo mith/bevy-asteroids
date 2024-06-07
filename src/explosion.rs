@@ -5,7 +5,12 @@ pub struct ExplosionPlugin;
 
 impl Plugin for ExplosionPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, explosion_expansion.in_set(ExplosionSet));
+        app.add_event::<ExplosionEvent>()
+            .add_systems(Startup, load_explosion_assets)
+            .add_systems(
+                Last,
+                (spawn_explosion_event, explosion_expansion).in_set(ExplosionSet),
+            );
     }
 }
 
@@ -27,10 +32,50 @@ impl Default for Explosion {
     }
 }
 
+#[derive(Resource)]
+struct ExplosionAssets {
+    explosion_sound: Handle<AudioSource>,
+}
+
+fn load_explosion_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
+    commands.insert_resource(ExplosionAssets {
+        explosion_sound: asset_server.load("audio/explosion.mp3"),
+    });
+}
+
+#[derive(Event)]
+pub struct ExplosionEvent {
+    pub position: Vec2,
+    pub radius: f32,
+}
+
+fn spawn_explosion_event(
+    mut commands: Commands,
+    mut events: EventReader<ExplosionEvent>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    explosion_assets: Res<ExplosionAssets>,
+) {
+    for event in events.read() {
+        spawn_explosion(
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            &explosion_assets,
+            &Transform::from_translation(event.position.extend(0.)),
+            event.radius,
+        );
+    }
+}
+
+#[derive(Component)]
+pub struct ExplosionSound;
+
 pub fn spawn_explosion(
     commands: &mut Commands,
-    meshes: &mut ResMut<Assets<Mesh>>,
-    materials: &mut ResMut<Assets<ColorMaterial>>,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<ColorMaterial>,
+    explosion_assets: &ExplosionAssets,
     transform: &Transform,
     radius: f32,
 ) {
@@ -41,6 +86,13 @@ pub fn spawn_explosion(
             mesh: meshes.add(Circle::new(radius)).into(),
             material: materials.add(ColorMaterial::from(Color::RED)),
             ..default()
+        },
+    ));
+    commands.spawn((
+        ExplosionSound,
+        AudioBundle {
+            source: explosion_assets.explosion_sound.clone(),
+            settings: PlaybackSettings::DESPAWN,
         },
     ));
 }

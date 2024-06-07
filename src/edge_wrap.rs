@@ -4,7 +4,7 @@ use bevy::{
     ecs::{
         component::Component,
         entity::Entity,
-        query::With,
+        query::{Changed, With},
         removal_detection::RemovedComponents,
         schedule::{common_conditions::resource_exists, IntoSystemConfigs, SystemSet},
         system::{Commands, Query, Res, ResMut, Resource},
@@ -114,7 +114,7 @@ fn duplicate_on_map_edge(
             &mut Handle<ColorMaterial>,
             Option<&mut Original>,
         ),
-        With<Duplicable>,
+        (With<Duplicable>, Changed<GlobalTransform>),
     >,
     bounds: Res<Bounds>,
 ) {
@@ -283,7 +283,7 @@ fn edge_positions(
 }
 
 fn sync_duplicate_transforms(
-    duplicable_query: Query<(&GlobalTransform, &Original)>,
+    duplicable_query: Query<(&GlobalTransform, &Original), Changed<GlobalTransform>>,
     mut transform_query: Query<&mut Transform>,
     bounds: Res<Bounds>,
 ) {
@@ -328,13 +328,16 @@ fn sync_duplicate_transforms(
 
 fn teleport_original_to_swap(
     mut commands: Commands,
-    mut original_query: Query<(
-        Entity,
-        &GlobalTransform,
-        &mut Transform,
-        &Collider,
-        &Original,
-    )>,
+    mut original_query: Query<
+        (
+            Entity,
+            &GlobalTransform,
+            &mut Transform,
+            &Collider,
+            &Original,
+        ),
+        Changed<GlobalTransform>,
+    >,
     bounds: Res<Bounds>,
 ) {
     for (original_entity, global_transform, mut transform, collider, original) in

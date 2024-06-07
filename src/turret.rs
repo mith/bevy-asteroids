@@ -1,13 +1,16 @@
 use bevy::{
-    app::{App, Plugin, Update},
-    asset::Assets,
+    app::{App, Plugin, Startup, Update},
+    asset::{AssetServer, Assets, Handle},
+    audio::{AudioBundle, AudioSource, PlaybackSettings},
+    core::Name,
     ecs::{
         component::Component,
         entity::Entity,
         event::{Event, EventReader},
         schedule::{IntoSystemConfigs, SystemSet},
-        system::{Commands, Query, Res, ResMut},
+        system::{Commands, Query, Res, ResMut, Resource},
     },
+    hierarchy::BuildChildren,
     math::{Vec3, Vec3Swizzles},
     render::mesh::Mesh,
     sprite::ColorMaterial,
@@ -22,6 +25,7 @@ pub struct TurretPlugin;
 impl Plugin for TurretPlugin {
     fn build(&self, app: &mut App) {
         app.add_event::<FireEvent>()
+            .add_systems(Startup, load_turret_assets)
             .add_systems(Update, (reload, fire_projectile).chain().in_set(TurretSet));
     }
 }
@@ -57,6 +61,20 @@ pub fn reload(
     }
 }
 
+#[derive(Resource)]
+struct TurretAssets {
+    firing_sound: Handle<AudioSource>,
+}
+
+#[derive(Component)]
+struct TurretFireSound;
+
+fn load_turret_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
+    commands.insert_resource(TurretAssets {
+        firing_sound: asset_server.load("audio/turret_fire.mp3"),
+    });
+}
+
 pub fn fire_projectile(
     mut commands: Commands,
     mut fire_event_reader: EventReader<FireEvent>,
@@ -64,6 +82,7 @@ pub fn fire_projectile(
     mut materials: ResMut<Assets<ColorMaterial>>,
     transform_query: Query<&Transform>,
     reload_timer_query: Query<&ReloadTimer>,
+    turret_assets: Res<TurretAssets>,
 ) {
     for FireEvent { turret_entity } in fire_event_reader.read() {
         if reload_timer_query.contains(*turret_entity) {
@@ -94,5 +113,13 @@ pub fn fire_projectile(
             position,
             velocity,
         );
+        commands.spawn((
+            Name::from("Turret fire sound"),
+            TurretFireSound,
+            AudioBundle {
+                source: turret_assets.firing_sound.clone(),
+                settings: PlaybackSettings::DESPAWN,
+            },
+        ));
     }
 }

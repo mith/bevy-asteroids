@@ -1,5 +1,5 @@
 use bevy::{
-    app::{App, Plugin, Update},
+    app::{App, Plugin, Startup, Update},
     asset::{Assets, Handle},
     ecs::{
         bundle::Bundle,
@@ -7,7 +7,7 @@ use bevy::{
         entity::Entity,
         event::{Event, EventReader},
         schedule::{IntoSystemConfigs, SystemSet},
-        system::{Command, Commands, EntityCommand, EntityCommands, Query, Res, ResMut},
+        system::{Command, Commands, EntityCommand, EntityCommands, Query, Res, ResMut, Resource},
         world::Mut,
     },
     log::info,
@@ -41,12 +41,22 @@ pub struct AsteroidPlugin;
 impl Plugin for AsteroidPlugin {
     fn build(&self, app: &mut App) {
         app.add_event::<SplitAsteroidEvent>()
+            .add_systems(Startup, load_asteroid_material)
             .add_systems(Update, split_asteroid_event.in_set(AsteroidSet));
     }
 }
 
 #[derive(SystemSet, Hash, Debug, PartialEq, Eq, Clone)]
 pub struct AsteroidSet;
+
+#[derive(Resource)]
+pub struct AsteroidMaterial(pub Handle<ColorMaterial>);
+
+fn load_asteroid_material(mut commands: Commands, mut materials: ResMut<Assets<ColorMaterial>>) {
+    commands.insert_resource(AsteroidMaterial(
+        materials.add(ColorMaterial::from(Color::WHITE)),
+    ));
+}
 
 #[derive(Component)]
 pub struct Asteroid;
@@ -261,7 +271,7 @@ const ASTEROID_MIN_AREA: f32 = 500.;
 fn split_asteroid_event(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
+    asteroid_material: Res<AsteroidMaterial>,
     mut asteroid_query: Query<(&Transform, &Velocity, &mut Mesh2dHandle)>,
     mut split_asteroid_events: EventReader<SplitAsteroidEvent>,
 ) {
@@ -273,7 +283,7 @@ fn split_asteroid_event(
             &mut commands,
             &mesh_handle.0,
             &mut meshes,
-            &mut materials,
+            asteroid_material.0.clone(),
             transform,
             *velocity,
             event.collision_direction,
@@ -288,7 +298,7 @@ fn split_asteroid(
     commands: &mut Commands,
     original_mesh: &Handle<Mesh>,
     meshes: &mut ResMut<Assets<Mesh>>,
-    materials: &mut ResMut<Assets<ColorMaterial>>,
+    material_handle: Handle<ColorMaterial>,
     transform: &Transform,
     velocity: Velocity,
     collision_direction: Vec2,
@@ -326,7 +336,14 @@ fn split_asteroid(
         let mesh_area = calculate_mesh_area(&mesh);
         if mesh_area > ASTEROID_MIN_AREA {
             // let mesh = round_mesh(mesh).0;
-            spawn_asteroid_split(commands, main_transform, velocity, meshes, materials, &mesh);
+            spawn_asteroid_split(
+                commands,
+                main_transform,
+                velocity,
+                meshes,
+                material_handle.clone(),
+                &mesh,
+            );
         } else if mesh_area > 0. && mesh_area < ASTEROID_MIN_AREA {
             debris.push((main_transform, velocity, mesh))
         }
@@ -339,7 +356,7 @@ fn split_asteroid(
         }));
     }
 
-    spawn_shattered_mesh_batch(commands, debris.into_iter(), meshes, materials);
+    spawn_shattered_mesh_batch(commands, material_handle, debris.into_iter(), meshes);
 }
 
 fn spawn_asteroid_split(
@@ -347,7 +364,7 @@ fn spawn_asteroid_split(
     transform: Transform,
     velocity: Velocity,
     meshes: &mut ResMut<Assets<Mesh>>,
-    materials: &mut ResMut<Assets<ColorMaterial>>,
+    material_handle: Handle<ColorMaterial>,
     mesh: &Mesh,
 ) {
     let collider = mesh_to_collider(mesh).expect("Failed to create collider");
@@ -357,7 +374,7 @@ fn spawn_asteroid_split(
         MaterialMesh2dBundle {
             transform,
             mesh: Mesh2dHandle(meshes.add(mesh.clone())),
-            material: materials.add(ColorMaterial::from(Color::WHITE)),
+            material: material_handle,
             ..default()
         },
         collider,
@@ -404,6 +421,7 @@ mod tests {
                 let rectangle_shape = Rectangle::from_size(Vec2::new(100., 100.));
                 let asteroid_mesh = Mesh::from(rectangle_shape);
                 let mesh_handle = meshes.add(asteroid_mesh.clone());
+                let material_handle = materials.add(ColorMaterial::from(Color::WHITE));
 
                 let transform = Transform::default();
 
@@ -411,7 +429,7 @@ mod tests {
                     &mut commands,
                     &mesh_handle,
                     &mut meshes,
-                    &mut materials,
+                    material_handle,
                     &transform,
                     Velocity::zero(),
                     Vec2::new(0., 1.),
@@ -452,6 +470,7 @@ mod tests {
                 let rectangle_shape = Rectangle::from_size(Vec2::new(100., 100.));
                 let asteroid_mesh = Mesh::from(rectangle_shape);
                 let mesh_handle = meshes.add(asteroid_mesh.clone());
+                let material_handle = materials.add(ColorMaterial::from(Color::WHITE));
 
                 let transform =
                     Transform::from_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2));
@@ -460,7 +479,7 @@ mod tests {
                     &mut commands,
                     &mesh_handle,
                     &mut meshes,
-                    &mut materials,
+                    material_handle,
                     &transform,
                     Velocity::zero(),
                     Vec2::new(0., 1.),

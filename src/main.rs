@@ -91,10 +91,7 @@ fn main() {
                 EdgeWrapSet,
                 TurretSet,
                 ProjectileSet,
-                (
-                    ExplosionSet,
-                    (AsteroidSet, (ShatterSet, GameFlowSet)).chain(),
-                ),
+                (AsteroidSet, (ShatterSet, GameFlowSet)).chain(),
             )
                 .chain(),
         )

@@ -1,5 +1,5 @@
 use bevy::{
-    app::{App, Plugin, Update},
+    app::{App, Plugin, Startup, Update},
     asset::{Assets, Handle},
     core::Name,
     ecs::{
@@ -8,7 +8,7 @@ use bevy::{
         event::{Event, EventReader, EventWriter},
         query::With,
         schedule::{IntoSystemConfigs, SystemSet},
-        system::{Commands, EntityCommand, EntityCommands, Query, Res, ResMut},
+        system::{Commands, EntityCommand, EntityCommands, Query, Res, ResMut, Resource},
         world::{Mut, World},
     },
     hierarchy::{BuildWorldChildren, Children, DespawnRecursiveExt},
@@ -33,7 +33,7 @@ use bevy_rapier2d::{
 use crate::{
     asteroid::{Asteroid, SplitAsteroidEvent},
     edge_wrap::Duplicable,
-    explosion::spawn_explosion,
+    explosion::{self, spawn_explosion, ExplosionEvent},
     shatter::spawn_shattered_mesh,
     utils::{contact_position_and_normal, mesh_to_collider},
 };
@@ -42,17 +42,28 @@ pub struct ShipPlugin;
 
 impl Plugin for ShipPlugin {
     fn build(&self, app: &mut App) {
-        app.add_event::<ShipDestroyedEvent>().add_systems(
-            Update,
-            (ship_movement, ship_asteroid_collision, explode_ship)
-                .chain()
-                .in_set(ShipSet),
-        );
+        app.add_event::<ShipDestroyedEvent>()
+            .add_systems(Startup, load_ship_material)
+            .add_systems(
+                Update,
+                (ship_movement, ship_asteroid_collision, explode_ship)
+                    .chain()
+                    .in_set(ShipSet),
+            );
     }
 }
 
 #[derive(SystemSet, Hash, Debug, PartialEq, Eq, Clone)]
 pub struct ShipSet;
+
+#[derive(Resource)]
+struct ShipMaterial(Handle<ColorMaterial>);
+
+fn load_ship_material(mut commands: Commands, mut materials: ResMut<Assets<ColorMaterial>>) {
+    commands.insert_resource(ShipMaterial(
+        materials.add(ColorMaterial::from(Color::WHITE)),
+    ));
+}
 
 #[derive(Component)]
 pub struct Ship;
@@ -275,9 +286,10 @@ fn ship_asteroid_collision(
 fn explode_ship(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
+    ship_material: Res<ShipMaterial>,
     mut ship_destroyed_events: EventReader<ShipDestroyedEvent>,
     ship_query: Query<(&Transform, Option<&Velocity>, &mut Mesh2dHandle), With<Ship>>,
+    mut explosion_events: EventWriter<ExplosionEvent>,
 ) {
     for ShipDestroyedEvent { ship_entity } in ship_destroyed_events.read() {
         let (ship_transform, ship_velocity, ship_mesh_handle) =
@@ -290,19 +302,16 @@ fn explode_ship(
 
         spawn_shattered_mesh(
             &mesh,
+            ship_material.0.clone(),
             ship_transform,
             ship_velocity.copied().unwrap_or_else(Velocity::zero),
             &mut commands,
             &mut meshes,
-            &mut materials,
         );
-        spawn_explosion(
-            &mut commands,
-            &mut meshes,
-            &mut materials,
-            ship_transform,
-            6.,
-        );
+        explosion_events.send(ExplosionEvent {
+            position: ship_transform.translation.xy(),
+            radius: 6.,
+        });
 
         commands.entity(*ship_entity).despawn_recursive();
     }

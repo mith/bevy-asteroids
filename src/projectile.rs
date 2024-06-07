@@ -1,7 +1,7 @@
 use crate::{
     asteroid::{Asteroid, SplitAsteroidEvent, ASTEROID_GROUP},
     edge_wrap::{get_original_entities, Duplicable, Duplicate},
-    explosion::spawn_explosion,
+    explosion::{self, spawn_explosion, ExplosionEvent},
     utils::{contact_position_and_normal, mesh_to_collider},
 };
 use bevy::{ecs::component::Component, time::Timer};
@@ -150,21 +150,17 @@ fn projectile_asteroid_collision(
 fn projectile_explosion(
     mut commands: Commands,
     mut events: EventReader<ProjectileExplosionEvent>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
+    mut explosion_events: EventWriter<ExplosionEvent>,
     transform_query: Query<&Transform>,
 ) {
     for event in events.read() {
         let transform = transform_query
             .get(event.projectile_entity)
             .expect("Projectile transform not found");
-        spawn_explosion(
-            &mut commands,
-            &mut meshes,
-            &mut materials,
-            transform,
-            PROJECTILE_RADIUS,
-        );
+        explosion_events.send(ExplosionEvent {
+            position: transform.translation.xy(),
+            radius: PROJECTILE_RADIUS,
+        });
         commands.entity(event.projectile_entity).despawn_recursive();
     }
 }

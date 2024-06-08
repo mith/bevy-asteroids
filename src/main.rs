@@ -19,7 +19,7 @@ use asteroid::{spawn_asteroids, Asteroid, AsteroidPlugin, AsteroidSet};
 use bevy::{asset::AssetMetaCheck, prelude::*};
 use bevy_rapier2d::prelude::{NoUserData, RapierConfiguration, RapierPhysicsPlugin};
 use edge_wrap::{EdgeWrapPlugin, EdgeWrapSet};
-use explosion::{Explosion, ExplosionPlugin, ExplosionSet};
+use explosion::{Explosion, ExplosionPlugin};
 use game_state::{GameResult, GameState};
 use input::{PlayerInputPlugin, PlayerInputSet};
 use player::{spawn_player, Player};
@@ -53,6 +53,7 @@ fn main() {
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 // present_mode: PresentMode::Mailbox,
+                title: "Asteroids".to_string(),
                 canvas: Some("#game".to_string()),
                 ..default()
             }),

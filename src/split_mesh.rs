@@ -111,6 +111,8 @@ pub fn split_mesh(
 #[instrument(skip(mesh))]
 pub fn trim_mesh(mesh: Mesh) -> ((Mesh, Vec2), Vec<(Mesh, Vec2)>) {
     let mut main_mesh = mesh.clone();
+    debug_assert!(valid_mesh(&main_mesh));
+
     let mut offset = Vec2::ZERO;
 
     let mut shards = Vec::new();
@@ -131,6 +133,7 @@ pub fn trim_mesh(mesh: Mesh) -> ((Mesh, Vec2), Vec<(Mesh, Vec2)>) {
         let vertex = Vec2::new(vertex[0], vertex[1]);
         let vertex_direction = vertex.normalize(); // Assume (0, 0) is the center of the mesh
         let mesh_area = calculate_mesh_area(&main_mesh);
+        debug_assert!(mesh_area > 0.0);
         let radius = (mesh_area / std::f32::consts::PI).sqrt() * 1.05;
 
         let vertex_position = vertex_direction * radius;

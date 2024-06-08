@@ -10,7 +10,6 @@ use bevy::{
         schedule::{IntoSystemConfigs, SystemSet},
         system::{Commands, Query, Res, ResMut, Resource},
     },
-    hierarchy::BuildChildren,
     math::{Vec3, Vec3Swizzles},
     render::mesh::Mesh,
     sprite::ColorMaterial,
@@ -75,7 +74,7 @@ fn load_turret_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
     });
 }
 
-pub fn fire_projectile(
+fn fire_projectile(
     mut commands: Commands,
     mut fire_event_reader: EventReader<FireEvent>,
     mut meshes: ResMut<Assets<Mesh>>,

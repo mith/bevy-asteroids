@@ -1,6 +1,7 @@
 use bevy::{
     app::{App, Plugin, Startup, Update},
-    asset::{Assets, Handle},
+    asset::{AssetServer, Assets, Handle},
+    audio::{AudioBundle, AudioSource, PlaybackSettings},
     core::Name,
     ecs::{
         component::Component,
@@ -11,7 +12,7 @@ use bevy::{
         system::{Commands, EntityCommand, EntityCommands, Query, Res, ResMut, Resource},
         world::{Mut, World},
     },
-    hierarchy::{BuildWorldChildren, Children, DespawnRecursiveExt},
+    hierarchy::{BuildChildren, BuildWorldChildren, Children, DespawnRecursiveExt, Parent},
     log::{info, warn},
     math::{
         primitives::{RegularPolygon, Triangle2d},
@@ -33,7 +34,7 @@ use bevy_rapier2d::{
 use crate::{
     asteroid::{Asteroid, SplitAsteroidEvent},
     edge_wrap::Duplicable,
-    explosion::{self, spawn_explosion, ExplosionEvent},
+    explosion::ExplosionEvent,
     shatter::spawn_shattered_mesh,
     utils::{contact_position_and_normal, mesh_to_collider},
 };
@@ -43,7 +44,7 @@ pub struct ShipPlugin;
 impl Plugin for ShipPlugin {
     fn build(&self, app: &mut App) {
         app.add_event::<ShipDestroyedEvent>()
-            .add_systems(Startup, load_ship_material)
+            .add_systems(Startup, load_ship_assets)
             .add_systems(
                 Update,
                 (ship_movement, ship_asteroid_collision, explode_ship)
@@ -57,12 +58,20 @@ impl Plugin for ShipPlugin {
 pub struct ShipSet;
 
 #[derive(Resource)]
-struct ShipMaterial(Handle<ColorMaterial>);
+struct ShipAssets {
+    material: Handle<ColorMaterial>,
+    thruster_sound: Handle<AudioSource>,
+}
 
-fn load_ship_material(mut commands: Commands, mut materials: ResMut<Assets<ColorMaterial>>) {
-    commands.insert_resource(ShipMaterial(
-        materials.add(ColorMaterial::from(Color::WHITE)),
-    ));
+fn load_ship_assets(
+    mut commands: Commands,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    asset_server: Res<AssetServer>,
+) {
+    commands.insert_resource(ShipAssets {
+        material: materials.add(ColorMaterial::from(Color::WHITE)),
+        thruster_sound: asset_server.load("audio/thrusters.mp3"),
+    });
 }
 
 #[derive(Component)]
@@ -163,11 +172,16 @@ impl<'w, 's> SpawnShipExt for Commands<'w, 's> {
 #[derive(Component)]
 pub struct Throttling;
 
-pub fn ship_movement(
+#[derive(Component)]
+struct ThrusterSound;
+
+fn ship_movement(
     mut commands: Commands,
     ship_query: Query<(Entity, &Transform, Option<&Throttling>, &Children), With<Ship>>,
     mut thruster_query: Query<&mut Handle<ColorMaterial>, With<Thruster>>,
+    thruster_sound_query: Query<(Entity, &Parent), With<ThrusterSound>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
+    ship_assets: Res<ShipAssets>,
     time: Res<Time>,
 ) {
     let ship_power = 500.;
@@ -191,8 +205,33 @@ pub fn ship_movement(
                 &time,
                 Visibility::Visible,
             );
+
+            if thruster_sound_query
+                .iter()
+                .any(|(_, parent)| parent.get() == ship_entity)
+            {
+                continue;
+            }
+            commands.entity(ship_entity).with_children(|parent| {
+                parent.spawn((
+                    Name::from("Thruster sound"),
+                    ThrusterSound,
+                    AudioBundle {
+                        source: ship_assets.thruster_sound.clone(),
+                        settings: PlaybackSettings::LOOP,
+                    },
+                ));
+            });
         } else {
-            commands.entity(ship_entity).remove::<ExternalImpulse>();
+            commands
+                .entity(ship_entity)
+                .remove::<(ExternalImpulse, AudioBundle)>();
+
+            for (thruster_sound_entity, parent) in thruster_sound_query.iter() {
+                if parent.get() == ship_entity {
+                    commands.entity(thruster_sound_entity).despawn_recursive();
+                }
+            }
             set_thrusters_visibility(
                 &mut commands,
                 children,
@@ -286,7 +325,7 @@ fn ship_asteroid_collision(
 fn explode_ship(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    ship_material: Res<ShipMaterial>,
+    ship_assets: Res<ShipAssets>,
     mut ship_destroyed_events: EventReader<ShipDestroyedEvent>,
     ship_query: Query<(&Transform, Option<&Velocity>, &mut Mesh2dHandle), With<Ship>>,
     mut explosion_events: EventWriter<ExplosionEvent>,
@@ -302,7 +341,7 @@ fn explode_ship(
 
         spawn_shattered_mesh(
             &mesh,
-            ship_material.0.clone(),
+            ship_assets.material.clone(),
             ship_transform,
             ship_velocity.copied().unwrap_or_else(Velocity::zero),
             &mut commands,

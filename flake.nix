@@ -23,6 +23,7 @@
   }:
     flake-utils.lib.eachDefaultSystem (
       system: let
+        inherit name;
         pkgs = nixpkgs.legacyPackages."${system}";
         rust = fenix.packages.${system}.stable;
         craneLib = (crane.mkLib nixpkgs.legacyPackages."${system}").overrideToolchain rust.toolchain;
@@ -40,6 +41,45 @@
           mold
           pkg-config
         ];
+        wasmPkg = {profile ? "release"}: let
+          target = "wasm32-unknown-unknown";
+          toolchainWasm = with fenix.packages.${system};
+            combine [
+              stable.rustc
+              stable.cargo
+              targets.${target}.stable.rust-std
+            ];
+          craneWasm = (crane.mkLib nixpkgs.legacyPackages.${system}).overrideToolchain toolchainWasm;
+        in
+          craneWasm.buildPackage {
+            src = craneLib.cleanCargoSource ./.;
+            CARGO_BUILD_TARGET = target;
+            CARGO_PROFILE = profile;
+            inherit nativeBuildInputs;
+            doCheck = false;
+          };
+
+        webPkg = {
+          package,
+          assets,
+        }:
+          pkgs.stdenv.mkDerivation {
+            inherit name;
+            src = ./wasm;
+            nativeBuildInputs = [
+              pkgs.wasm-bindgen-cli
+              pkgs.binaryen
+            ];
+            phases = ["unpackPhase" "installPhase"];
+            installPhase = ''
+              mkdir -p $out
+              wasm-bindgen --out-dir $out --out-name ${name} --target web ${package}/bin/${name}.wasm
+              mv $out/${name}_bg.wasm .
+              wasm-opt -Oz -o $out/${name}_bg.wasm ${name}_bg.wasm
+              cp * $out/
+              ln -s ${assets}/assets $out/assets
+            '';
+          };
       in {
         packages = {
           asteroids-bin = craneLib.buildPackage {
@@ -69,44 +109,27 @@
             '';
           };
 
-          asteroids-wasm = let
-            target = "wasm32-unknown-unknown";
-            toolchainWasm = with fenix.packages.${system};
-              combine [
-                stable.rustc
-                stable.cargo
-                targets.${target}.stable.rust-std
-              ];
-            craneWasm = (crane.mkLib nixpkgs.legacyPackages.${system}).overrideToolchain toolchainWasm;
-          in
-            craneWasm.buildPackage {
-              src = craneLib.cleanCargoSource ./.;
-              CARGO_BUILD_TARGET = target;
-              CARGO_PROFILE = "release";
-              inherit nativeBuildInputs;
-              doCheck = false;
+          asteroids-wasm =
+            wasmPkg {
             };
-
-          asteroids-web = pkgs.stdenv.mkDerivation {
-            name = "asteroids-web";
-            src = ./wasm;
-            nativeBuildInputs = [
-              pkgs.wasm-bindgen-cli
-              pkgs.binaryen
-            ];
-            phases = ["unpackPhase" "installPhase"];
-            installPhase = ''
-              mkdir -p $out
-              wasm-bindgen --out-dir $out --out-name asteroids --target web ${self.packages.${system}.asteroids-wasm}/bin/asteroids.wasm
-              mv $out/asteroids_bg.wasm .
-              wasm-opt -Oz -o $out/asteroids_bg.wasm asteroids_bg.wasm
-              cp * $out/
-              ln -s ${self.packages.${system}.asteroids-assets}/assets $out/assets
-            '';
+          asteroids-web = webPkg {
+            name = "asteroids";
+            package = self.packages.${system}.asteroids-wasm;
+            assets = self.packages.${system}.asteroids-assets;
           };
-
           asteroids-web-server = pkgs.writeShellScriptBin "asteroids-web-server" ''
             ${pkgs.simple-http-server}/bin/simple-http-server -i -c=html,wasm,ttf,js -- ${self.packages.${system}.asteroids-web}/
+          '';
+
+          asteroids-wasm-debug = wasmPkg {
+            profile = "release-debug";
+          };
+          asteroids-web-debug = webPkg {
+            package = self.packages.${system}.asteroids-wasm-debug;
+            assets = self.packages.${system}.asteroids-assets;
+          };
+          asteroids-web-server-debug = pkgs.writeShellScriptBin "asteroids-web-server-debug" ''
+            ${pkgs.simple-http-server}/bin/simple-http-server -i -c=html,wasm,ttf,js -- ${self.packages.${system}.asteroids-web-debug}/
           '';
         };
 

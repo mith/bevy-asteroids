@@ -42,8 +42,8 @@ pub fn get_intersection_points_2d(
     vertex_index: usize,
     opposite_vertices: &[usize],
     plane_point: Vec2,
-) -> Vec<Vec2> {
-    let mut intersections = Vec::new();
+) -> SmallVec<[Vec2; 2]> {
+    let mut intersections = SmallVec::new();
     let v0 = Vec2::new(vertices[vertex_index][0], vertices[vertex_index][1]);
     for &index in opposite_vertices {
         let v1 = Vec2::new(vertices[index][0], vertices[index][1]);

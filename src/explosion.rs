@@ -69,9 +69,9 @@ fn spawn_explosion_event(
 }
 
 #[derive(Component)]
-pub struct ExplosionSound;
+struct ExplosionSound;
 
-pub fn spawn_explosion(
+fn spawn_explosion(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<ColorMaterial>,

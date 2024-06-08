@@ -1,7 +1,7 @@
 use crate::{
     asteroid::{Asteroid, SplitAsteroidEvent, ASTEROID_GROUP},
     edge_wrap::{get_original_entities, Duplicable, Duplicate},
-    explosion::{self, spawn_explosion, ExplosionEvent},
+    explosion::ExplosionEvent,
     utils::{contact_position_and_normal, mesh_to_collider},
 };
 use bevy::{ecs::component::Component, time::Timer};

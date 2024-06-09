@@ -1,0 +1,4 @@
+#!/usr/bin/env nix-shell
+#!nix-shell -i bash --packages cargo-bump
+
+cargo bump patch --git-tag

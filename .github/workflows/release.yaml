@@ -5,8 +5,8 @@ permissions:
 
 on:
   push:
-    branches:
-      - main
+    tags:
+      - '*'
 
 env:
   # update with the name of the main binary
@@ -20,24 +20,14 @@ env:
 
 
 jobs:
-  # Get the release version
-  # Format: {date}-{short-commit-hash}
-  determine-version:
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.get_version.outputs.version }}
-    steps:
-      - id: get_version
-        run: |
-          echo "version=$(date +'%Y%m%d')-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-
 
   # Build for wasm
   release-wasm:
     runs-on: ubuntu-latest
-    needs: determine-version
 
     steps:
+      - uses: olegtarasov/get-tag@v2.1.3
+        id: get_version
       - uses: actions/checkout@v4
         with:
           lfs: ${{ env.use_git_lfs }}
@@ -75,16 +65,17 @@ jobs:
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: ${{ env.binary }}.zip
-          asset_name: ${{ env.binary }}-wasm-${{ needs.determine-version.outputs.version }}.zip
+          asset_name: ${{ env.binary }}-wasm-${{ steps.get_version.outputs.tag }}.zip
           tag: ${{ github.ref }}
           overwrite: true
 
   # Build for Linux
   release-linux:
     runs-on: ubuntu-latest
-    needs: determine-version
 
     steps:
+      - uses: olegtarasov/get-tag@v2.1.3
+        id: get_version
       - uses: actions/checkout@v4
         with:
           lfs: ${{ env.use_git_lfs }}
@@ -133,16 +124,17 @@ jobs:
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: ${{ env.binary }}.zip
-          asset_name: ${{ env.binary }}-linux-${{  needs.determine-version.outputs.version }}.zip
+          asset_name: ${{ env.binary }}-linux-${{ steps.get_version.outputs.tag }}.zip
           tag: ${{ github.ref }}
           overwrite: true
 
   # Build for Windows
   release-windows:
     runs-on: windows-latest
-    needs: determine-version
 
     steps:
+      - uses: olegtarasov/get-tag@v2.1.3
+        id: get_version
       - uses: actions/checkout@v4
         with:
           lfs: ${{ env.use_git_lfs }}
@@ -178,16 +170,17 @@ jobs:
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: ${{ env.binary }}.zip
-          asset_name: ${{ env.binary }}-windows-${{ needs.determine-version.outputs.version }}.zip
+          asset_name: ${{ env.binary }}-windows-${{ steps.get_version.outputs.tag }}.zip
           tag: ${{ github.ref }}
           overwrite: true
 
   # Build for MacOS x86_64
   release-macOS-intel:
     runs-on: macOS-latest
-    needs: determine-version
 
     steps:
+      - uses: olegtarasov/get-tag@v2.1.3
+        id: get_version
       - uses: actions/checkout@v4
         with:
           lfs: ${{ env.use_git_lfs }}
@@ -223,16 +216,17 @@ jobs:
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file:  ${{ env.binary }}-macOS-intel.dmg
-          asset_name: ${{ env.binary }}-macOS-intel-${{ needs.determine-version.outputs.version }}.dmg
+          asset_name: ${{ env.binary }}-macOS-intel-${{ steps.get_version.outputs.tag }}.dmg
           tag: ${{ github.ref }}
           overwrite: true
 
   # Build for MacOS Apple Silicon
   release-macOS-apple-silicon:
     runs-on: macOS-latest
-    needs: determine-version
 
     steps:
+      - uses: olegtarasov/get-tag@v2.1.3
+        id: get_version
       - uses: actions/checkout@v4
         with:
           lfs: ${{ env.use_git_lfs }}
@@ -268,7 +262,7 @@ jobs:
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: ${{ env.binary }}-macOS-apple-silicon.dmg
-          asset_name: ${{ env.binary }}-macOS-apple-silicon-${{ needs.determine-version.outputs.version }}.dmg
+          asset_name: ${{ env.binary }}-macOS-apple-silicon-${{ steps.get_version.outputs.tag }}.dmg
           tag: ${{ github.ref }}
           overwrite: true
 

@@ -27,7 +27,7 @@ use projectile::{Projectile, ProjectilePlugin, ProjectileSet};
 use shatter::{Debris, ShatterPlugin, ShatterSet};
 use ship::{ShipDestroyedEvent, ShipPlugin, ShipSet};
 use turret::{TurretPlugin, TurretSet};
-use ui::{FinishedScreenPlugin, StartScreenPlugin};
+use ui::{FinishedScreenPlugin, HudPlugin, StartScreenPlugin};
 use utils::cleanup;
 
 const PHYSICS_LENGTH_UNIT: f32 = 100.0;
@@ -76,6 +76,7 @@ fn main() {
             ShatterPlugin,
             StartScreenPlugin,
             FinishedScreenPlugin,
+            HudPlugin,
         ))
         .add_systems(Startup, setup_camera)
         .add_systems(OnEnter(GameState::Playing), spawn_player)

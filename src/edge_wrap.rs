@@ -19,6 +19,7 @@ use bevy::{
     window::{PrimaryWindow, Window},
 };
 use bevy_rapier2d::{
+    dynamics::RigidBody,
     geometry::{ActiveEvents, Collider},
     na::{Isometry2, Vector2},
 };
@@ -221,6 +222,7 @@ fn spawn_duplicate(
             },
             collider.clone(),
             ActiveEvents::COLLISION_EVENTS,
+            RigidBody::KinematicPositionBased,
         ))
         .id()
 }

@@ -7,26 +7,22 @@ use bevy::{
     app::{App, Plugin, Update},
     ecs::{
         entity::Entity,
-        event::EventReader,
         query::With,
         schedule::{
-            common_conditions::in_state, Condition, IntoSystemConfigs, NextState, OnEnter, OnExit,
-            States,
+            common_conditions::{in_state, resource_exists_and_equals},
+            Condition, IntoSystemConfigs, NextState, OnEnter, OnExit, States,
         },
         system::{Query, ResMut},
     },
-    input::{
-        mouse::MouseButton,
-        touch::{TouchInput, TouchPhase, Touches},
-        ButtonInput,
-    },
+    input::{mouse::MouseButton, touch::Touches, ButtonInput},
     log::info,
     prelude::{
         default, AlignItems, AssetServer, BuildChildren, Color, Commands, Component, FlexDirection,
         JustifyContent, Name, NodeBundle, Res, Style, TextBundle, TextStyle, Val,
     },
     time::{Time, Timer, TimerMode},
-    ui::UiRect,
+    ui::{node_bundles::ButtonBundle, UiRect},
+    window::{PrimaryWindow, Window},
 };
 
 pub struct StartScreenPlugin;
@@ -209,12 +205,10 @@ fn spawn_instructions(
 
 fn start_game(
     mouse_input: Res<ButtonInput<MouseButton>>,
-    mut touch_events: EventReader<TouchInput>,
+    touches: Res<Touches>,
     mut next_gamestate: ResMut<NextState<GameState>>,
 ) {
-    if mouse_input.just_pressed(MouseButton::Left)
-        || touch_events.read().any(|t| t.phase == TouchPhase::Started)
-    {
+    if mouse_input.just_pressed(MouseButton::Left) || touches.any_just_pressed() {
         next_gamestate.set(GameState::Playing);
         info!("Starting game");
     }
@@ -339,14 +333,68 @@ fn finished_screen_timer(
 fn restart_game(
     mut commands: Commands,
     mouse_input: Res<ButtonInput<MouseButton>>,
-    mut touch_events: EventReader<TouchInput>,
+    touches: Res<Touches>,
+    mut next_finished_screen_state: ResMut<NextState<FinishedScreenState>>,
     mut next_gamestate: ResMut<NextState<GameState>>,
 ) {
-    if mouse_input.just_pressed(MouseButton::Left)
-        || touch_events.read().any(|t| t.phase == TouchPhase::Started)
-    {
+    if mouse_input.just_pressed(MouseButton::Left) || touches.any_just_pressed() {
         commands.remove_resource::<GameResult>();
+        next_finished_screen_state.set(FinishedScreenState::Locked);
         next_gamestate.set(GameState::Playing);
         info!("Restarting game");
     }
+}
+
+pub struct HudPlugin;
+
+impl Plugin for HudPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(
+            OnEnter(GameState::Playing),
+            spawn_hud.run_if(resource_exists_and_equals(InputMode::Touch)),
+        )
+        .add_systems(OnExit(GameState::Playing), cleanup::<Hud>);
+    }
+}
+
+#[derive(Component)]
+pub struct Hud;
+
+#[derive(Component)]
+pub struct ShootButton;
+
+fn spawn_hud(mut commands: Commands, windows: Query<&Window, With<PrimaryWindow>>) {
+    let window = windows.single();
+    let button_ratio = 0.2;
+    let button_size = (window.height() * button_ratio).min(window.width() * button_ratio);
+
+    commands
+        .spawn((
+            Hud,
+            NodeBundle {
+                style: Style {
+                    width: Val::Percent(100.),
+                    height: Val::Percent(100.),
+                    align_items: AlignItems::End,
+                    justify_content: JustifyContent::End,
+                    ..default()
+                },
+                ..default()
+            },
+        ))
+        .with_children(|parent| {
+            parent.spawn((
+                ShootButton,
+                ButtonBundle {
+                    style: Style {
+                        width: Val::Px(button_size),
+                        height: Val::Px(button_size),
+                        border: UiRect::all(Val::Px(5.)),
+                        ..default()
+                    },
+                    border_color: Color::WHITE.into(),
+                    ..default()
+                },
+            ));
+        });
 }

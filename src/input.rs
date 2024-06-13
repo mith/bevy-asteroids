@@ -1,33 +1,27 @@
 use bevy::{
     app::{App, Plugin, Update},
-    asset::Assets,
     ecs::{
-        component::Component,
         entity::Entity,
-        event::{EventReader, EventWriter},
+        event::EventWriter,
         query::With,
         schedule::{
-            common_conditions::{in_state, not, resource_added, resource_exists_and_equals},
-            Condition, IntoSystemConfigs, SystemSet,
+            common_conditions::{in_state, not, resource_exists_and_equals},
+            IntoSystemConfigs, SystemSet,
         },
-        system::{Commands, Local, Query, Res, ResMut, Resource},
+        system::{Commands, Query, Res, Resource},
     },
-    input::{
-        mouse::MouseButton,
-        touch::{TouchInput, TouchPhase},
-        ButtonInput,
-    },
-    math::{primitives::Circle, Quat, Rect, Vec2, Vec3},
-    prelude::default,
-    render::{camera::Camera, color::Color, mesh::Mesh},
-    sprite::{ColorMaterial, MaterialMesh2dBundle},
+    input::{mouse::MouseButton, touch::Touches, ButtonInput},
+    math::Quat,
+    render::{camera::Camera, color::Color},
     transform::components::{GlobalTransform, Transform},
+    ui::{BackgroundColor, Interaction, Node},
     window::{PrimaryWindow, Window},
 };
 
 use crate::{
     ship::{Ship, Throttling},
     turret::FireEvent,
+    ui::ShootButton,
     GameState, Player,
 };
 
@@ -46,14 +40,6 @@ impl Plugin for PlayerInputPlugin {
                 stop_player_throttling.run_if(not(in_state(GameState::Playing))),
             )
                 .in_set(PlayerInputSet),
-        )
-        .add_systems(
-            Update,
-            spawn_shoot_button.run_if(
-                in_state(GameState::Playing)
-                    .and_then(resource_added::<InputMode>)
-                    .and_then(resource_exists_and_equals(InputMode::Touch)),
-            ),
         );
     }
 }
@@ -109,62 +95,42 @@ pub fn player_ship_mouse_input(
     }
 }
 
-#[derive(Default)]
-struct TouchState(Option<Vec2>);
-
 fn player_ship_touch_input(
     mut commands: Commands,
-    mut touches: EventReader<TouchInput>,
-    windows: Query<&Window, With<PrimaryWindow>>,
+    touches: Res<Touches>,
+    mut shoot_button_query: Query<
+        (&Interaction, &mut BackgroundColor, &GlobalTransform, &Node),
+        With<ShootButton>,
+    >,
     mut player_query: Query<(Entity, &GlobalTransform, &mut Transform), (With<Player>, With<Ship>)>,
     camera_query: Query<(&Camera, &GlobalTransform)>,
     mut fire_projectile_event_writer: EventWriter<FireEvent>,
-    mut touch_state: Local<TouchState>,
 ) {
     let (camera, camera_global_transform) = camera_query.single();
-    let primary_window = windows.single();
 
-    let button_ratio = 0.2;
-    let button_size =
-        (primary_window.height() * button_ratio).min(primary_window.width() * button_ratio);
+    let (interaction, mut btn_bg_color, btn_transform, btn_node) = shoot_button_query.single_mut();
 
-    // Define the region for firing projectiles
-    let fire_button_region = Rect {
-        min: Vec2::new(
-            primary_window.width() / 2. - button_size,
-            -primary_window.height() / 2.,
-        ), // Adjust size as needed
-        max: Vec2::new(
-            primary_window.width() / 2.,
-            -primary_window.height() / 2. + button_size,
-        ),
-    };
-
-    for touch in touches.read() {
-        match touch.phase {
-            TouchPhase::Started | TouchPhase::Moved => {
-                *touch_state = TouchState(Some(touch.position));
-            }
-            TouchPhase::Ended | TouchPhase::Canceled => {
-                *touch_state = TouchState(None);
-            }
+    if *interaction == Interaction::Pressed {
+        for (player_entity, _, _) in player_query.iter() {
+            fire_projectile_event_writer.send(FireEvent {
+                turret_entity: player_entity,
+            });
         }
+        btn_bg_color.0 = Color::WHITE;
+    } else {
+        btn_bg_color.0 = Color::BLACK;
     }
 
-    if let Some(touch_pos) = touch_state.0 {
-        // This could be a short tap or the start of a hold
-        let touch_world_pos = camera
-            .viewport_to_world_2d(camera_global_transform, touch_pos)
-            .expect("Touch position not in world coordinates");
+    let button_rect = btn_node.logical_rect(btn_transform);
 
-        if fire_button_region.contains(touch_world_pos) {
-            // Touch is in the right bottom corner, fire a projectile
-            for (player_entity, _, _) in player_query.iter() {
-                fire_projectile_event_writer.send(FireEvent {
-                    turret_entity: player_entity,
-                });
-            }
-        } else {
+    if let Some(touch) = touches
+        .iter()
+        .find(|touch| !button_rect.contains(touch.position()))
+    {
+        let touch_world_pos = camera
+            .viewport_to_world_2d(camera_global_transform, touch.position())
+            .expect("Touch position not in world coordinates");
+        {
             // Point ship towards touch location
             for (_, player_global_transform, mut player_transform) in player_query.iter_mut() {
                 let direction = touch_world_pos - player_global_transform.translation().truncate();
@@ -192,35 +158,4 @@ pub fn stop_player_throttling(
     for player_entity in player_query.iter() {
         commands.entity(player_entity).remove::<Throttling>();
     }
-}
-
-#[derive(Component)]
-struct ShootButton;
-
-fn spawn_shoot_button(
-    mut commands: Commands,
-    windows: Query<&Window, With<PrimaryWindow>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
-) {
-    let window = windows.single();
-    let button_ratio = 0.2;
-    let button_size = (window.height() * button_ratio).min(window.width() * button_ratio);
-    let mesh_handle = meshes.add(Circle {
-        radius: button_size / 2.,
-    });
-
-    commands.spawn((
-        ShootButton,
-        MaterialMesh2dBundle {
-            mesh: mesh_handle.into(),
-            material: materials.add(ColorMaterial::from(Color::RED)),
-            transform: Transform::from_translation(Vec3::new(
-                window.width() / 2. - button_size / 2.,
-                -window.height() / 2. + button_size / 2.,
-                10.,
-            )),
-            ..default()
-        },
-    ));
 }

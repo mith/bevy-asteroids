@@ -22,6 +22,7 @@ debug-assertions = true
 opt-level = 3
 
 [dependencies]
+bevy_common_assets = { version = "0.10.0", features = ["ron"] }
 bevy_rapier2d = { version = "0.26.0", features = ["wasm-bindgen"] }
 itertools = "0.13.0"
 rand = "0.8.5"

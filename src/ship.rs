@@ -26,7 +26,7 @@ use bevy::{
 };
 use bevy_rapier2d::{
     dynamics::{ExternalImpulse, RigidBody, Velocity},
-    geometry::{CollisionGroups, Group},
+    geometry::{ActiveEvents, CollisionGroups, Group},
     plugin::RapierContext,
     prelude::CollisionEvent,
 };
@@ -133,6 +133,7 @@ impl EntityCommand for SpawnShip {
                 RigidBody::Dynamic,
                 collider,
                 Duplicable,
+                ActiveEvents::COLLISION_EVENTS,
                 CollisionGroups::new(SHIP_GROUP, SHIP_FILTER),
             ))
             .with_children(|parent| {
@@ -184,7 +185,7 @@ fn ship_movement(
     ship_assets: Res<ShipAssets>,
     time: Res<Time>,
 ) {
-    let ship_power = 500.;
+    let ship_power = 800.;
 
     for (ship_entity, global_transform, throttling, children) in &ship_query {
         if throttling.is_some() {

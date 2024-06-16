@@ -12,11 +12,12 @@ mod shatter;
 mod ship;
 mod split_mesh;
 mod turret;
+mod ufo;
 mod ui;
 mod utils;
 
 use asteroid::{spawn_asteroids, Asteroid, AsteroidPlugin, AsteroidSet};
-use bevy::{asset::AssetMetaCheck, prelude::*};
+use bevy::{asset::AssetMetaCheck, prelude::*, window::WindowMode};
 use bevy_rapier2d::prelude::{NoUserData, RapierConfiguration, RapierPhysicsPlugin};
 use edge_wrap::{EdgeWrapPlugin, EdgeWrapSet};
 use explosion::{Explosion, ExplosionPlugin};
@@ -27,6 +28,7 @@ use projectile::{Projectile, ProjectilePlugin, ProjectileSet};
 use shatter::{Debris, ShatterPlugin, ShatterSet};
 use ship::{ShipDestroyedEvent, ShipPlugin, ShipSet};
 use turret::{TurretPlugin, TurretSet};
+use ufo::{Ufo, UfoPlugin};
 use ui::{FinishedScreenPlugin, HudPlugin, StartScreenPlugin};
 use utils::cleanup;
 
@@ -53,6 +55,7 @@ fn main() {
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 // present_mode: PresentMode::Mailbox,
+                mode: WindowMode::Fullscreen,
                 title: "Asteroids".to_string(),
                 canvas: Some("#game".to_string()),
                 ..default()
@@ -77,13 +80,14 @@ fn main() {
             StartScreenPlugin,
             FinishedScreenPlugin,
             HudPlugin,
+            UfoPlugin,
         ))
         .add_systems(Startup, setup_camera)
         .add_systems(OnEnter(GameState::Playing), spawn_player)
         .add_systems(OnEnter(GameState::Playing), spawn_asteroids)
         .add_systems(
             OnExit(GameState::Finished),
-            cleanup_types!(Player, Asteroid, Debris, Projectile, Explosion),
+            cleanup_types!(Player, Asteroid, Debris, Projectile, Explosion, Ufo),
         )
         .configure_sets(
             Update,
@@ -99,7 +103,7 @@ fn main() {
         )
         .add_systems(
             Update,
-            ((player_destroyed, asteroids_cleared).run_if(in_state(GameState::Playing)))
+            ((player_destroyed, level_cleared).run_if(in_state(GameState::Playing)))
                 .in_set(GameFlowSet),
         );
 
@@ -128,13 +132,14 @@ fn player_destroyed(
     ship_destroyed_events.clear();
 }
 
-fn asteroids_cleared(
+fn level_cleared(
     mut commands: Commands,
     asteroid_query: Query<Entity, With<Asteroid>>,
+    ufo_query: Query<Entity, With<Ufo>>,
     mut next_gamestate: ResMut<NextState<GameState>>,
 ) {
-    if asteroid_query.iter().count() == 0 {
-        info!("All asteroids cleared");
+    if asteroid_query.is_empty() && ufo_query.is_empty() {
+        info!("Level cleared");
         commands.insert_resource(GameResult::Win);
         next_gamestate.set(GameState::Finished);
     }

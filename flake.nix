@@ -23,7 +23,7 @@
   }:
     flake-utils.lib.eachDefaultSystem (
       system: let
-        inherit name;
+        name = "asteroids";
         pkgs = nixpkgs.legacyPackages."${system}";
         rust = fenix.packages.${system}.stable;
         craneLib = (crane.mkLib nixpkgs.legacyPackages."${system}").overrideToolchain rust.toolchain;
@@ -62,6 +62,7 @@
         webPkg = {
           package,
           assets,
+          wasmOpt ? false,
         }:
           pkgs.stdenv.mkDerivation {
             inherit name;
@@ -75,11 +76,21 @@
               mkdir -p $out
               wasm-bindgen --out-dir $out --out-name ${name} --target web ${package}/bin/${name}.wasm
               mv $out/${name}_bg.wasm .
-              wasm-opt -Oz -o $out/${name}_bg.wasm ${name}_bg.wasm
+              ${pkgs.lib.optionalString wasmOpt ''
+                wasm-opt -Oz -o $out/${name}_bg.wasm ${name}_bg.wasm
+              ''}
               cp * $out/
               ln -s ${assets}/assets $out/assets
             '';
           };
+        webServer = {
+          package,
+          args ? ["-c=html,wasm,ttf,js"],
+          extraArgs ? "",
+        }:
+          pkgs.writeShellScriptBin "web-server" ''
+            ${pkgs.simple-http-server}/bin/simple-http-server -i ${pkgs.lib.concatStringsSep " " args} ${extraArgs} -- ${package}/
+          '';
       in {
         packages = {
           asteroids-bin = craneLib.buildPackage {
@@ -116,6 +127,7 @@
             name = "asteroids";
             package = self.packages.${system}.asteroids-wasm;
             assets = self.packages.${system}.asteroids-assets;
+            wasmOpt = true;
           };
           asteroids-web-server = pkgs.writeShellScriptBin "asteroids-web-server" ''
             ${pkgs.simple-http-server}/bin/simple-http-server -i -c=html,wasm,ttf,js -- ${self.packages.${system}.asteroids-web}/
@@ -128,9 +140,10 @@
             package = self.packages.${system}.asteroids-wasm-debug;
             assets = self.packages.${system}.asteroids-assets;
           };
-          asteroids-web-server-debug = pkgs.writeShellScriptBin "asteroids-web-server-debug" ''
-            ${pkgs.simple-http-server}/bin/simple-http-server -i -c=html,wasm,ttf,js -- ${self.packages.${system}.asteroids-web-debug}/
-          '';
+          asteroids-web-server-debug = webServer {
+            package = self.packages.${system}.asteroids-web-debug;
+            extraArgs = "--nocache";
+          };
         };
 
         defaultPackage = self.packages.${system}.asteroids;

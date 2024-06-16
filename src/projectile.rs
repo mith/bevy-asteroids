@@ -2,13 +2,14 @@ use crate::{
     asteroid::{Asteroid, SplitAsteroidEvent, ASTEROID_GROUP},
     edge_wrap::{get_original_entities, Duplicable, Duplicate},
     explosion::ExplosionEvent,
+    ufo::{Ufo, UfoDestroyedEvent, UFO_GROUP},
     utils::{contact_position_and_normal, mesh_to_collider},
 };
 use bevy::{ecs::component::Component, time::Timer};
 use bevy::{prelude::*, sprite::MaterialMesh2dBundle};
 use bevy_rapier2d::{
     dynamics::{RigidBody, Velocity},
-    geometry::{CollisionGroups, Group},
+    geometry::{ActiveEvents, CollisionGroups, Group},
     plugin::RapierContext,
     prelude::CollisionEvent,
 };
@@ -21,7 +22,7 @@ impl Plugin for ProjectilePlugin {
             Update,
             (
                 projectile_timer,
-                projectile_asteroid_collision,
+                (projectile_asteroid_collision, projectile_ufo_collision),
                 projectile_explosion,
             )
                 .chain()
@@ -70,7 +71,8 @@ pub fn spawn_projectile(
         },
         collider,
         Duplicable,
-        CollisionGroups::new(PROJECTILE_GROUP, ASTEROID_GROUP),
+        ActiveEvents::COLLISION_EVENTS,
+        CollisionGroups::new(PROJECTILE_GROUP, ASTEROID_GROUP | UFO_GROUP),
     ));
 }
 
@@ -142,6 +144,36 @@ fn projectile_asteroid_collision(
                 asteroid_entity,
                 collision_direction,
                 collision_position,
+            });
+        }
+    }
+}
+
+fn projectile_ufo_collision(
+    commands: Commands,
+    mut collision_events: EventReader<CollisionEvent>,
+    projectile_query: Query<&Projectile>,
+    ufo_query: Query<Entity, With<Ufo>>,
+    mut ufo_destroyed_events: EventWriter<UfoDestroyedEvent>,
+    mut projectile_explosion_events: EventWriter<ProjectileExplosionEvent>,
+) {
+    for event in collision_events.read() {
+        if let CollisionEvent::Started(entity_a, entity_b, _) = event {
+            let (projectile_entity, ufo_entity) =
+                if projectile_query.contains(*entity_a) && ufo_query.contains(*entity_b) {
+                    (entity_a, entity_b)
+                } else if projectile_query.contains(*entity_b) && ufo_query.contains(*entity_a) {
+                    (entity_b, entity_a)
+                } else {
+                    continue;
+                };
+
+            ufo_destroyed_events.send(UfoDestroyedEvent {
+                ufo_entity: *ufo_entity,
+            });
+
+            projectile_explosion_events.send(ProjectileExplosionEvent {
+                projectile_entity: *projectile_entity,
             });
         }
     }

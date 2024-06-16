@@ -48,7 +48,7 @@ pub fn spawn_shattered_mesh(
     transform: &Transform,
     velocity: Velocity,
     commands: &mut Commands,
-    meshes: &mut ResMut<Assets<Mesh>>,
+    meshes: &mut Assets<Mesh>,
 ) {
     let mut rng = ThreadRng::default();
     let shards = shatter_mesh(mesh, DEBRIS_MAX_AREA)
@@ -109,7 +109,7 @@ pub const DEBRIS_GROUP: Group = Group::GROUP_4;
 fn spawn_debris_batch(
     commands: &mut Commands,
     debris: impl Iterator<Item = (Transform, Velocity, Mesh)>,
-    meshes: &mut ResMut<Assets<Mesh>>,
+    meshes: &mut Assets<Mesh>,
     material_handle: Handle<ColorMaterial>,
 ) {
     let mut rng = ThreadRng::default();

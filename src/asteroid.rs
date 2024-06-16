@@ -22,8 +22,8 @@ use bevy::{
     utils::default,
 };
 use bevy_rapier2d::{
-    dynamics::{RigidBody, Sleeping, Velocity},
-    geometry::{ActiveEvents, Collider, CollisionGroups, Group, Restitution},
+    dynamics::{ReadMassProperties, RigidBody, Sleeping, Velocity},
+    geometry::{Collider, CollisionGroups, Group, Restitution},
 };
 use itertools::Itertools;
 use rand::{rngs::ThreadRng, Rng};
@@ -199,10 +199,10 @@ fn create_asteroid_bundle(
             ..default()
         },
         collider,
-        ActiveEvents::COLLISION_EVENTS,
         Duplicable,
         CollisionGroups::new(ASTEROID_GROUP, Group::ALL),
         RigidBody::Dynamic,
+        ReadMassProperties::default(),
         velocity,
         Restitution {
             coefficient: 0.9,

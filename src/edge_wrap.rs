@@ -20,7 +20,7 @@ use bevy::{
 };
 use bevy_rapier2d::{
     dynamics::RigidBody,
-    geometry::{ActiveEvents, Collider},
+    geometry::{ActiveEvents, Collider, CollisionGroups},
     na::{Isometry2, Vector2},
 };
 
@@ -114,13 +114,21 @@ fn duplicate_on_map_edge(
             &mut Mesh2dHandle,
             &mut Handle<ColorMaterial>,
             Option<&mut Original>,
+            Option<&CollisionGroups>,
         ),
         (With<Duplicable>, Changed<GlobalTransform>),
     >,
     bounds: Res<Bounds>,
 ) {
-    for (entity, transform, collider, mesh_handle, material_handle, mut opt_original) in
-        duplicable_query.iter_mut()
+    for (
+        entity,
+        transform,
+        collider,
+        mesh_handle,
+        material_handle,
+        mut opt_original,
+        opt_coll_groups,
+    ) in duplicable_query.iter_mut()
     {
         let mut spawn_duplicates = |original: &mut Original| {
             if original.duplicate_x.is_some()
@@ -147,6 +155,7 @@ fn duplicate_on_map_edge(
                     collider,
                     Vec3::new(0.0, offset_y, 0.0),
                     entity,
+                    opt_coll_groups.cloned(),
                 );
                 original.duplicate_y = Some(duplicate_y);
                 debug!("Spawning duplicate y for entity {:?}", entity);
@@ -162,6 +171,7 @@ fn duplicate_on_map_edge(
                     collider,
                     Vec3::new(offset_x, 0.0, 0.0),
                     entity,
+                    opt_coll_groups.cloned(),
                 );
                 original.duplicate_x = Some(duplicate_x);
                 debug!("Spawning duplicate x for entity {:?}", entity);
@@ -180,6 +190,7 @@ fn duplicate_on_map_edge(
                     collider,
                     Vec3::new(offset_xy.x, offset_xy.y, 0.0),
                     entity,
+                    opt_coll_groups.cloned(),
                 );
                 original.duplicate_xy = Some(duplicate_xy);
                 debug!("Spawning duplicate xy for entity {:?}", entity);
@@ -210,21 +221,24 @@ fn spawn_duplicate(
     collider: &Collider,
     offset: Vec3,
     original: Entity,
+    opt_coll_groups: Option<CollisionGroups>,
 ) -> Entity {
-    commands
-        .spawn((
-            Duplicate { original },
-            MaterialMesh2dBundle {
-                mesh: mesh_handle.clone(),
-                material: material_handle.clone(),
-                transform: Transform::from_translation(transform.translation() + offset),
-                ..Default::default()
-            },
-            collider.clone(),
-            ActiveEvents::COLLISION_EVENTS,
-            RigidBody::KinematicPositionBased,
-        ))
-        .id()
+    let mut spawn = commands.spawn((
+        Duplicate { original },
+        MaterialMesh2dBundle {
+            mesh: mesh_handle.clone(),
+            material: material_handle.clone(),
+            transform: Transform::from_translation(transform.translation() + offset),
+            ..Default::default()
+        },
+        collider.clone(),
+        ActiveEvents::COLLISION_EVENTS,
+        RigidBody::KinematicPositionBased,
+    ));
+    if let Some(coll_groups) = opt_coll_groups {
+        spawn.insert(coll_groups);
+    }
+    spawn.id()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

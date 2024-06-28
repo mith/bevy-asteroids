@@ -20,6 +20,7 @@ use bevy_rapier2d::{
 };
 use itertools::Itertools;
 use rand::{rngs::ThreadRng, Rng};
+use tracing::info;
 
 use crate::{edge_wrap::Duplicable, split_mesh::shatter_mesh, utils::mesh_to_collider};
 
@@ -155,6 +156,7 @@ fn debris_lifetime(
     for (entity, mut debris) in &mut debris_query {
         debris.lifetime.tick(time.delta());
         if debris.lifetime.finished() {
+            info!("Debris expired");
             commands.entity(entity).despawn();
         }
     }

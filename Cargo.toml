@@ -26,6 +26,7 @@ bevy_common_assets = { version = "0.10.0", features = ["ron"] }
 bevy_rapier2d = { version = "0.26.0", features = ["wasm-bindgen"] }
 itertools = "0.13.0"
 rand = "0.8.5"
+serde = { version = "1.0.203", features = ["derive"] }
 smallvec = "1.13.2"
 tracing = "0.1.40"
 

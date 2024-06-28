@@ -3,30 +3,36 @@ mod tractor_beam;
 
 use bevy::{
     app::{App, Plugin, Startup, Update},
-    asset::{AssetServer, Assets, Handle},
+    asset::{Asset, AssetServer, Assets, Handle},
     ecs::{
         component::Component,
         entity::Entity,
         event::{Event, EventReader, EventWriter},
         query::With,
-        schedule::{common_conditions::in_state, IntoSystemConfigs, OnEnter, SystemSet},
+        schedule::{
+            common_conditions::{in_state, not, resource_exists},
+            Condition, IntoSystemConfigs, OnEnter, SystemSet,
+        },
         system::{Commands, Query, Res, ResMut, Resource},
     },
     hierarchy::DespawnRecursiveExt,
     input::{keyboard::KeyCode, ButtonInput},
     math::{Quat, Rect, Vec2, Vec3, Vec3Swizzles},
     prelude::default,
+    reflect::TypePath,
     render::{color::Color, mesh::Mesh},
     sprite::{ColorMaterial, MaterialMesh2dBundle},
     time::{Time, Timer, TimerMode},
     transform::components::{GlobalTransform, Transform},
 };
+use bevy_common_assets::ron::RonAssetPlugin;
 use bevy_rapier2d::{
     dynamics::{LockedAxes, RigidBody, Velocity},
     geometry::{CollisionGroups, Group},
 };
-use movement::move_ufo;
+use movement::{move_ufo, AvoidanceWeights};
 use rand::Rng;
+use serde::Deserialize;
 use tracing::info;
 use tractor_beam::{throw_asteroid, TractorBeam};
 
@@ -47,21 +53,32 @@ impl Plugin for UfoPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, load_ufo_assets)
             .add_event::<UfoDestroyedEvent>()
+            .add_plugins(RonAssetPlugin::<UfoSettings>::new(&["ufo_settings.ron"]))
+            .add_systems(Startup, load_ufo_settings)
             .init_resource::<SpawnTimer>()
-            .init_resource::<UfoDebug>()
             .add_systems(OnEnter(GameState::Playing), reset_spawn_timer)
             .add_systems(
                 Update,
                 (
                     move_ufo,
                     ufo_inside_bounds,
-                    throw_asteroid.run_if(in_state(GameState::Playing)),
+                    throw_asteroid,
                     ufo_destroyed,
-                    spawn_ufo.run_if(in_state(GameState::Playing)),
+                    spawn_ufo,
                 )
+                    .run_if(not(in_state(GameState::Menu)))
                     .chain(),
             )
-            .add_systems(Update, toggle_debug);
+            .add_systems(
+                Update,
+                (
+                    set_ufo_settings_resource.run_if(
+                        resource_exists::<UfoSettingsHandle>
+                            .and_then(not(resource_exists::<UfoSettings>)),
+                    ),
+                    toggle_debug.run_if(resource_exists::<UfoSettings>),
+                ),
+            );
     }
 }
 
@@ -74,14 +91,34 @@ pub struct Ufo;
 #[derive(Component)]
 pub struct KillTarget(Entity);
 
-#[derive(Resource, Debug, Default)]
-struct UfoDebug {
-    pub enabled: bool,
+#[derive(Resource, Debug, Default, Deserialize, Asset, TypePath, Clone)]
+struct UfoSettings {
+    debug_enabled: bool,
+    max_acceleration: f32,
+    max_velocity: f32,
+    avoidance_weights: AvoidanceWeights,
 }
 
-fn toggle_debug(mut ufo_debug: ResMut<UfoDebug>, keyboard_input: Res<ButtonInput<KeyCode>>) {
+#[derive(Resource)]
+struct UfoSettingsHandle(Handle<UfoSettings>);
+
+fn load_ufo_settings(mut commands: Commands, asset_server: Res<AssetServer>) {
+    commands.insert_resource(UfoSettingsHandle(asset_server.load("ufo_settings.ron")));
+}
+
+fn set_ufo_settings_resource(
+    mut commands: Commands,
+    ufo_settings_handle: Res<UfoSettingsHandle>,
+    ufo_settings_assets: Res<Assets<UfoSettings>>,
+) {
+    if let Some(ufo_settings) = ufo_settings_assets.get(ufo_settings_handle.0.clone()) {
+        commands.insert_resource(ufo_settings.clone());
+    }
+}
+
+fn toggle_debug(mut ufo_settings: ResMut<UfoSettings>, keyboard_input: Res<ButtonInput<KeyCode>>) {
     if keyboard_input.just_pressed(KeyCode::F3) {
-        ufo_debug.enabled = !ufo_debug.enabled;
+        ufo_settings.debug_enabled = !ufo_settings.debug_enabled;
     }
 }
 
@@ -130,6 +167,7 @@ fn spawn_ufo(
     mut split_asteroid_events: EventReader<SplitAsteroidEvent>,
     bounds: Res<Bounds>,
     mut spawn_timer: ResMut<SpawnTimer>,
+    ufo_settings: Res<UfoSettings>,
     time: Res<Time>,
 ) {
     if !ufo_query.is_empty() {
@@ -172,6 +210,7 @@ fn spawn_ufo(
             LockedAxes::ROTATION_LOCKED,
             KillTarget(player_entity),
             TractorBeam::default(),
+            ufo_settings.avoidance_weights.clone(),
         ));
         return;
     }
@@ -228,6 +267,7 @@ fn ufo_destroyed(
             &mut meshes,
         );
 
+        info!("UFO destroyed");
         commands.entity(*ufo_entity).despawn_recursive();
 
         explosion_events.send(explosion::ExplosionEvent {

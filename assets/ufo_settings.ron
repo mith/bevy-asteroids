@@ -1,0 +1,10 @@
+(
+    debug_enabled: true,
+    max_acceleration: 1000.,
+    max_velocity: 400.,
+    avoidance_weights: (
+        forward_threat_avoidance_weight: 100.,
+        surrounding_threat_avoidance_weight: 1000.,
+        incoming_threat_avoidance_weight: 1000.
+    )
+)

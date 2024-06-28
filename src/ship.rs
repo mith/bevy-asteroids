@@ -353,6 +353,7 @@ fn explode_ship(
             radius: 6.,
         });
 
+        info!("Ship destroyed");
         commands.entity(*ship_entity).despawn_recursive();
     }
 }

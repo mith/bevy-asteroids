@@ -222,6 +222,7 @@ dependencies = [
  "itertools 0.13.0",
  "proptest",
  "rand",
+ "serde",
  "smallvec",
  "tracing",
 ]

@@ -83,6 +83,7 @@ fn projectile_timer(
 ) {
     for (entity, mut projectile) in query.iter_mut() {
         if projectile.lifetime.tick(time.delta()).just_finished() {
+            info!("Projectile expired");
             commands.entity(entity).despawn();
         }
     }
@@ -193,6 +194,7 @@ fn projectile_explosion(
             position: transform.translation.xy(),
             radius: PROJECTILE_RADIUS,
         });
+        info!("Projectile exploded");
         commands.entity(event.projectile_entity).despawn_recursive();
     }
 }

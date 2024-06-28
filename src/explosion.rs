@@ -110,6 +110,7 @@ fn explosion_expansion(
 ) {
     for (entity, mut explosion, mut transform, material_handle) in query.iter_mut() {
         if explosion.lifetime.tick(time.delta()).just_finished() {
+            info!("Explosion finished");
             commands.entity(entity).despawn();
         } else {
             let material = materials.get_mut(material_handle.id()).unwrap();

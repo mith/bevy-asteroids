@@ -1,5 +1,6 @@
 use bevy::{
     ecs::{
+        component::Component,
         entity::Entity,
         query::With,
         system::{Commands, Query, Res},
@@ -18,13 +19,18 @@ use bevy_rapier2d::{
     plugin::RapierContext,
 };
 use rand::Rng;
+use serde::Deserialize;
 
 use crate::{asteroid::ASTEROID_GROUP, projectile::PROJECTILE_GROUP};
 
-use super::{KillTarget, Ufo, UfoDebug, UFO_GROUP};
+use super::{KillTarget, Ufo, UfoSettings, UFO_GROUP};
 
-const MAX_UFO_ACCELERATION: Vec2 = Vec2::splat(1000.);
-const MAX_UFO_VELOCITY: f32 = 400.;
+#[derive(Component, Debug, Deserialize, Default, Clone)]
+pub struct AvoidanceWeights {
+    forward_threat_avoidance_weight: f32,
+    surrounding_threat_avoidance_weight: f32,
+    incoming_threat_avoidance_weight: f32,
+}
 
 pub fn move_ufo(
     mut commands: Commands,
@@ -34,6 +40,7 @@ pub fn move_ufo(
             &GlobalTransform,
             Option<&Velocity>,
             &Collider,
+            &AvoidanceWeights,
             Option<&KillTarget>,
         ),
         With<Ufo>,
@@ -42,13 +49,19 @@ pub fn move_ufo(
     collider_query: Query<(&GlobalTransform, Option<&Velocity>, &Collider)>,
     time: Res<Time>,
     rapier_context: Res<RapierContext>,
-    ufo_debug: Res<UfoDebug>,
+    ufo_settings: Res<UfoSettings>,
     mut gizmos: Gizmos,
 ) {
     let mut rng = rand::thread_rng();
 
-    for (ufo_entity, ufo_transform, opt_ufo_velocity, ufo_collider, opt_target) in
-        ufo_query.iter_mut()
+    for (
+        ufo_entity,
+        ufo_transform,
+        opt_ufo_velocity,
+        ufo_collider,
+        avoidance_weights,
+        opt_target,
+    ) in ufo_query.iter_mut()
     {
         let target_impulse_strength = if let Some(KillTarget(target_entity)) = opt_target {
             calculate_target_impulse(*target_entity, &transform_query, ufo_transform, &mut rng)
@@ -64,7 +77,8 @@ pub fn move_ufo(
             opt_ufo_velocity.unwrap_or(&Velocity::zero()),
             ufo_collider,
             &collider_query,
-            ufo_debug.enabled.then_some(&mut gizmos),
+            avoidance_weights,
+            ufo_settings.debug_enabled.then_some(&mut gizmos),
         );
 
         let dampen_impulse = if avoidance_impulse_strength.length() < 10. {
@@ -79,19 +93,18 @@ pub fn move_ufo(
         let old_velocity = opt_ufo_velocity.map_or(Vec2::ZERO, |velocity| velocity.linvel);
         let new_velocity = impulse_strength * 50_000. * time.delta_seconds();
 
+        let max_acceleration = Vec2::splat(ufo_settings.max_acceleration);
         let new_velocity = new_velocity.clamp(
-            old_velocity - MAX_UFO_ACCELERATION * time.delta_seconds(),
-            old_velocity + MAX_UFO_ACCELERATION * time.delta_seconds(),
+            old_velocity - max_acceleration * time.delta_seconds(),
+            old_velocity + max_acceleration * time.delta_seconds(),
         );
 
         let velocity = (old_velocity * 2. + new_velocity) / 3.;
+        let max_velocity = Vec2::splat(ufo_settings.max_velocity);
 
         // Apply the final impulse
         commands.entity(ufo_entity).insert(Velocity {
-            linvel: velocity.clamp(
-                Vec2::splat(-MAX_UFO_VELOCITY),
-                Vec2::splat(MAX_UFO_VELOCITY),
-            ),
+            linvel: velocity.clamp(-max_velocity, max_velocity),
             ..default()
         });
     }
@@ -104,6 +117,7 @@ fn calculate_avoidance_impulse(
     ufo_velocity: &Velocity,
     ufo_collider: &Collider,
     collider_query: &Query<(&GlobalTransform, Option<&Velocity>, &Collider)>,
+    avoidance_weights: &AvoidanceWeights,
     mut gizmos: Option<&mut Gizmos>,
 ) -> Vec2 {
     let mut avoid_direction = Vec2::ZERO;
@@ -116,10 +130,15 @@ fn calculate_avoidance_impulse(
         ufo_entity,
         collider_query,
         &mut gizmos,
-    );
+    ) * avoidance_weights.forward_threat_avoidance_weight;
+
+    let (avoid_surrounding_direction, avoid_incoming_direction) =
+        avoid_surrounding_threats(collider_query, ufo_transform, rapier_context, &mut gizmos);
 
     avoid_direction +=
-        avoid_surrounding_threats(collider_query, ufo_transform, rapier_context, &mut gizmos);
+        avoid_surrounding_direction * avoidance_weights.surrounding_threat_avoidance_weight;
+    avoid_direction +=
+        avoid_incoming_direction * avoidance_weights.incoming_threat_avoidance_weight;
 
     avoid_direction
 }
@@ -129,8 +148,9 @@ fn avoid_surrounding_threats(
     ufo_transform: &GlobalTransform,
     rapier_context: &Res<RapierContext>,
     gizmos: &mut Option<&mut Gizmos<bevy::prelude::DefaultGizmoConfigGroup>>,
-) -> Vec2 {
-    let mut avoid_direction = Vec2::ZERO;
+) -> (Vec2, Vec2) {
+    let mut avoid_surrounding_direction = Vec2::ZERO;
+    let mut avoid_incoming_direction = Vec2::ZERO;
     let collider = Collider::ball(300.);
     let mut intersections = vec![];
     rapier_context.intersections_with_shape(
@@ -156,7 +176,7 @@ fn avoid_surrounding_threats(
             asteroid_transform.translation().xy() - ufo_transform.translation().xy();
 
         if let Some(asteroid_velocity) = opt_asteroid_velocity {
-            avoid_direction += avoid_moving_threat(
+            avoid_incoming_direction += avoid_moving_threat(
                 rapier_context,
                 asteroid_transform,
                 asteroid_velocity,
@@ -170,15 +190,15 @@ fn avoid_surrounding_threats(
 
         let weight = 1. / asteroid_ufo_distance.length().powi(3);
         let asteroid_ufo_direction = asteroid_ufo_distance.normalize();
-        let avoidance_impulse = -asteroid_ufo_direction * weight * 100000.;
+        let avoidance_impulse = -asteroid_ufo_direction * weight;
         let start = ufo_transform.translation().xy();
         if let Some(gizmos) = gizmos.as_mut() {
             gizmos.line_2d(start, start + avoidance_impulse, Color::GREEN);
             gizmos.circle_2d(asteroid_transform.translation().xy(), 20., Color::GREEN);
         }
-        avoid_direction += avoidance_impulse;
+        avoid_surrounding_direction += avoidance_impulse;
     }
-    avoid_direction
+    (avoid_surrounding_direction, avoid_incoming_direction)
 }
 
 fn avoid_moving_threat(
@@ -217,7 +237,7 @@ fn avoid_moving_threat(
             asteroid_velocity.linvel.length_squared() + 1. / asteroid_ufo_distance.length_squared();
 
         // Adjust direction based on which side of the normal the UFO is on
-        let avoidance_impulse = if dot_product > 0. { -normal } else { normal } * weight * 100.;
+        let avoidance_impulse = if dot_product > 0. { -normal } else { normal } * weight;
 
         let start = ufo_transform.translation().xy();
         if let Some(gizmos) = gizmos.as_mut() {
@@ -235,7 +255,7 @@ fn avoid_forward_threat(
     ufo_velocity: &Velocity,
     ufo_collider: &Collider,
     ufo_entity: Entity,
-    collider_query: &Query<(&GlobalTransform, Option<&Velocity>, &Collider), ()>,
+    collider_query: &Query<(&GlobalTransform, Option<&Velocity>, &Collider)>,
     gizmos: &mut Option<&mut Gizmos<bevy::prelude::DefaultGizmoConfigGroup>>,
 ) -> Vec2 {
     let mut avoid_direction = Vec2::ZERO;

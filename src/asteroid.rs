@@ -74,7 +74,7 @@ pub fn spawn_asteroids(mut commands: Commands, bounds: Res<Bounds>) {
     let asteroid_spawn_count = (((bounds.0.x * bounds.0.y) as usize
         / (ASTEROID_SPAWN_CIRCUMRADIUS * ASTEROID_SPAWN_CIRCUMRADIUS) as usize)
         / 10)
-        .clamp(2, 15);
+        .clamp(2, 5);
     info!(bounds= ?bounds, number= ?asteroid_spawn_count, "Spawning asteroids");
     let mut rng = rand::thread_rng();
     let asteroid_positions: Vec<Vec2> = (0..asteroid_spawn_count)
@@ -264,6 +264,7 @@ fn split_asteroid_event(
             event.collision_position,
         );
 
+        info!("Asteroid split");
         commands.entity(event.asteroid_entity).despawn();
     }
 }

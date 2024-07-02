@@ -1,5 +1,5 @@
 (
-    debug_enabled: true,
+    debug_enabled: false,
     max_acceleration: 1000.,
     max_velocity: 400.,
     avoidance_weights: (

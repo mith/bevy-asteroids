@@ -56,7 +56,7 @@ impl Plugin for UfoPlugin {
             .add_plugins(RonAssetPlugin::<UfoSettings>::new(&["ufo_settings.ron"]))
             .add_systems(Startup, load_ufo_settings)
             .init_resource::<SpawnTimer>()
-            .add_systems(OnEnter(GameState::Playing), pause_spawn_timer)
+            .add_systems(OnEnter(GameState::Playing), reset_spawn_timer)
             .add_systems(
                 Update,
                 (
@@ -154,12 +154,9 @@ impl Default for SpawnTimer {
     }
 }
 
-fn pause_spawn_timer(mut spawn_timer: ResMut<SpawnTimer>) {
-    spawn_timer.timer.pause();
-}
-
 fn reset_spawn_timer(mut spawn_timer: ResMut<SpawnTimer>) {
     spawn_timer.timer.reset();
+    spawn_timer.timer.pause();
 }
 
 fn spawn_ufo(

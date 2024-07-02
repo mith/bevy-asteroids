@@ -151,7 +151,6 @@ fn projectile_asteroid_collision(
 }
 
 fn projectile_ufo_collision(
-    commands: Commands,
     mut collision_events: EventReader<CollisionEvent>,
     projectile_query: Query<&Projectile>,
     ufo_query: Query<Entity, With<Ufo>>,

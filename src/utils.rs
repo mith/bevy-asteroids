@@ -7,6 +7,7 @@ use bevy::{
     },
     hierarchy::DespawnRecursiveExt,
     math::Vec2,
+    prelude::Resource,
     render::mesh::Mesh,
 };
 use bevy_rapier2d::{geometry::Collider, plugin::RapierContext};
@@ -34,10 +35,14 @@ pub fn mesh_to_collider(mesh: &Mesh) -> Result<Collider, String> {
     Ok(Collider::trimesh(vertices, indices_vec))
 }
 
-pub fn cleanup<T: Component>(mut commands: Commands, query: Query<Entity, With<T>>) {
+pub fn cleanup_component<T: Component>(mut commands: Commands, query: Query<Entity, With<T>>) {
     for entity in &query {
         commands.entity(entity).despawn_recursive();
     }
+}
+
+pub fn cleanup_resource<T: Resource>(mut commands: Commands) {
+    commands.remove_resource::<T>();
 }
 
 pub fn contact_position_and_normal(

@@ -1,7 +1,7 @@
 use crate::{
     game_state::{GameResult, GameState},
     input::InputMode,
-    utils::cleanup,
+    utils::cleanup_component,
 };
 use bevy::{
     app::{App, Plugin, Update},
@@ -9,8 +9,8 @@ use bevy::{
         entity::Entity,
         query::With,
         schedule::{
-            common_conditions::{in_state, resource_exists_and_equals},
-            Condition, IntoSystemConfigs, NextState, OnEnter, OnExit, States,
+            common_conditions::in_state, Condition, IntoSystemConfigs, NextState, OnEnter, OnExit,
+            States,
         },
         system::{Query, ResMut},
     },
@@ -21,8 +21,7 @@ use bevy::{
         JustifyContent, Name, NodeBundle, Res, Style, TextBundle, TextStyle, Val,
     },
     time::{Time, Timer, TimerMode},
-    ui::{node_bundles::ButtonBundle, UiRect},
-    window::{PrimaryWindow, Window},
+    ui::UiRect,
 };
 
 pub struct StartScreenPlugin;
@@ -30,9 +29,12 @@ pub struct StartScreenPlugin;
 impl Plugin for StartScreenPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(OnEnter(GameState::Menu), spawn_start_screen)
-            .add_systems(OnExit(GameState::Menu), cleanup::<StartScreen>)
+            .add_systems(OnExit(GameState::Menu), cleanup_component::<StartScreen>)
             .init_state::<StartScreenState>()
-            .add_systems(OnExit(StartScreenState::Start), cleanup::<ClickOrTap>)
+            .add_systems(
+                OnExit(StartScreenState::Start),
+                cleanup_component::<ClickOrTap>,
+            )
             .add_systems(
                 Update,
                 set_input_mode
@@ -47,7 +49,7 @@ impl Plugin for StartScreenPlugin {
             )
             .add_systems(
                 OnExit(StartScreenState::Instructions),
-                cleanup::<Instructions>,
+                cleanup_component::<Instructions>,
             );
     }
 }
@@ -165,22 +167,22 @@ fn spawn_instructions(
                 };
                 parent.spawn(TextBundle::from_section(
                     match *input_mode {
-                        InputMode::Mouse => "Point cursor to aim ship",
-                        InputMode::Touch => "Touch to aim ship",
+                        InputMode::Mouse => "Move the cursor to aim the ship",
+                        InputMode::Touch => "Tap to aim the ship",
                     },
                     instruction_style.clone(),
                 ));
                 parent.spawn(TextBundle::from_section(
                     match *input_mode {
                         InputMode::Mouse => "Hold click to fire thrusters",
-                        InputMode::Touch => "Hold touch to fire thrusters",
+                        InputMode::Touch => "Press and hold to activate thrusters",
                     },
                     instruction_style.clone(),
                 ));
                 parent.spawn(TextBundle::from_section(
                     match *input_mode {
-                        InputMode::Mouse => "Right click to fire turret",
-                        InputMode::Touch => "Tap right bottom corner to fire turret",
+                        InputMode::Mouse => "Right click to fire the turret",
+                        InputMode::Touch => "Double-tap to fire the turret",
                     },
                     instruction_style.clone(),
                 ));
@@ -220,7 +222,10 @@ impl Plugin for FinishedScreenPlugin {
     fn build(&self, app: &mut App) {
         app.init_state::<FinishedScreenState>()
             .add_systems(OnEnter(GameState::Finished), spawn_game_finished_screen)
-            .add_systems(OnExit(GameState::Finished), cleanup::<FinishedText>)
+            .add_systems(
+                OnExit(GameState::Finished),
+                cleanup_component::<FinishedText>,
+            )
             .add_systems(
                 Update,
                 (
@@ -343,58 +348,4 @@ fn restart_game(
         next_gamestate.set(GameState::Playing);
         info!("Restarting game");
     }
-}
-
-pub struct HudPlugin;
-
-impl Plugin for HudPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_systems(
-            OnEnter(GameState::Playing),
-            spawn_hud.run_if(resource_exists_and_equals(InputMode::Touch)),
-        )
-        .add_systems(OnExit(GameState::Playing), cleanup::<Hud>);
-    }
-}
-
-#[derive(Component)]
-pub struct Hud;
-
-#[derive(Component)]
-pub struct ShootButton;
-
-fn spawn_hud(mut commands: Commands, windows: Query<&Window, With<PrimaryWindow>>) {
-    let window = windows.single();
-    let button_ratio = 0.2;
-    let button_size = (window.height() * button_ratio).min(window.width() * button_ratio);
-
-    commands
-        .spawn((
-            Hud,
-            NodeBundle {
-                style: Style {
-                    width: Val::Percent(100.),
-                    height: Val::Percent(100.),
-                    align_items: AlignItems::End,
-                    justify_content: JustifyContent::End,
-                    ..default()
-                },
-                ..default()
-            },
-        ))
-        .with_children(|parent| {
-            parent.spawn((
-                ShootButton,
-                ButtonBundle {
-                    style: Style {
-                        width: Val::Px(button_size),
-                        height: Val::Px(button_size),
-                        border: UiRect::all(Val::Px(5.)),
-                        ..default()
-                    },
-                    border_color: Color::WHITE.into(),
-                    ..default()
-                },
-            ));
-        });
 }

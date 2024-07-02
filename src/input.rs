@@ -11,17 +11,18 @@ use bevy::{
         system::{Commands, Query, Res, Resource},
     },
     input::{mouse::MouseButton, touch::Touches, ButtonInput},
-    math::Quat,
-    render::{camera::Camera, color::Color},
+    math::{Quat, Vec2},
+    prelude::{OnExit, ResMut},
+    render::camera::Camera,
+    time::{Time, Timer, TimerMode},
     transform::components::{GlobalTransform, Transform},
-    ui::{BackgroundColor, Interaction, Node},
     window::{PrimaryWindow, Window},
 };
 
 use crate::{
     ship::{Ship, Throttling},
     turret::FireEvent,
-    ui::ShootButton,
+    utils::cleanup_resource,
     GameState, Player,
 };
 
@@ -34,12 +35,18 @@ impl Plugin for PlayerInputPlugin {
             (
                 (
                     player_ship_mouse_input.run_if(resource_exists_and_equals(InputMode::Mouse)),
-                    player_ship_touch_input.run_if(resource_exists_and_equals(InputMode::Touch)),
+                    (touch_shoot_timer_update, player_ship_touch_input)
+                        .chain()
+                        .run_if(resource_exists_and_equals(InputMode::Touch)),
                 )
                     .run_if(in_state(GameState::Playing)),
                 stop_player_throttling.run_if(not(in_state(GameState::Playing))),
             )
                 .in_set(PlayerInputSet),
+        )
+        .add_systems(
+            OnExit(GameState::Playing),
+            cleanup_resource::<TouchShootTimer>,
         );
     }
 }
@@ -95,59 +102,78 @@ pub fn player_ship_mouse_input(
     }
 }
 
+#[derive(Resource)]
+struct TouchShootTimer {
+    timer: Timer,
+    position: Vec2,
+}
+
+impl TouchShootTimer {
+    fn new(position: Vec2) -> Self {
+        Self {
+            timer: Timer::from_seconds(0.3, TimerMode::Once),
+            position,
+        }
+    }
+}
+
+fn touch_shoot_timer_update(
+    mut commands: Commands,
+    mut timer: Option<ResMut<TouchShootTimer>>,
+    time: Res<Time>,
+) {
+    if let Some(timer) = timer.as_mut() {
+        if timer.timer.tick(time.delta()).just_finished() {
+            commands.remove_resource::<TouchShootTimer>();
+        }
+    }
+}
+
 fn player_ship_touch_input(
     mut commands: Commands,
     touches: Res<Touches>,
-    mut shoot_button_query: Query<
-        (&Interaction, &mut BackgroundColor, &GlobalTransform, &Node),
-        With<ShootButton>,
-    >,
     mut player_query: Query<(Entity, &GlobalTransform, &mut Transform), (With<Player>, With<Ship>)>,
     camera_query: Query<(&Camera, &GlobalTransform)>,
     mut fire_projectile_event_writer: EventWriter<FireEvent>,
+    touch_shoot_timer: Option<Res<TouchShootTimer>>,
 ) {
     let (camera, camera_global_transform) = camera_query.single();
 
-    let (interaction, mut btn_bg_color, btn_transform, btn_node) = shoot_button_query.single_mut();
+    let Ok((player_entity, player_global_transform, mut player_transform)) =
+        player_query.get_single_mut()
+    else {
+        return;
+    };
 
-    if *interaction == Interaction::Pressed {
-        for (player_entity, _, _) in player_query.iter() {
-            fire_projectile_event_writer.send(FireEvent {
-                turret_entity: player_entity,
-            });
+    if let Some(touch) = touches.first_pressed_position() {
+        if let Some(timer) = touch_shoot_timer {
+            if timer.position.distance_squared(touch) < 1000.0 {
+                fire_projectile_event_writer.send(FireEvent {
+                    turret_entity: player_entity,
+                });
+                commands.remove_resource::<TouchShootTimer>();
+                return;
+            }
         }
-        btn_bg_color.0 = Color::WHITE;
-    } else {
-        btn_bg_color.0 = Color::BLACK;
-    }
-
-    let button_rect = btn_node.logical_rect(btn_transform);
-
-    if let Some(touch) = touches
-        .iter()
-        .find(|touch| !button_rect.contains(touch.position()))
-    {
         let touch_world_pos = camera
-            .viewport_to_world_2d(camera_global_transform, touch.position())
+            .viewport_to_world_2d(camera_global_transform, touch)
             .expect("Touch position not in world coordinates");
         {
             // Point ship towards touch location
-            for (_, player_global_transform, mut player_transform) in player_query.iter_mut() {
-                let direction = touch_world_pos - player_global_transform.translation().truncate();
-                let angle = direction.y.atan2(direction.x);
-                let target_rotation = Quat::from_rotation_z(angle - std::f32::consts::FRAC_PI_2);
-                player_transform.rotation = target_rotation;
-            }
+            let direction = touch_world_pos - player_global_transform.translation().truncate();
+            let angle = direction.y.atan2(direction.x);
+            let target_rotation = Quat::from_rotation_z(angle - std::f32::consts::FRAC_PI_2);
+            player_transform.rotation = target_rotation;
 
             for (player_entity, _, _) in player_query.iter() {
                 commands.entity(player_entity).insert(Throttling);
             }
         }
-    } else {
-        // Touch ended or cancelled, stop throttling
+    } else if let Some(touch) = touches.iter_just_released().next() {
         for (player_entity, _, _) in player_query.iter() {
             commands.entity(player_entity).remove::<Throttling>();
         }
+        commands.insert_resource(TouchShootTimer::new(touch.position()));
     }
 }
 

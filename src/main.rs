@@ -29,8 +29,8 @@ use shatter::{Debris, ShatterPlugin, ShatterSet};
 use ship::{ShipDestroyedEvent, ShipPlugin, ShipSet};
 use turret::{TurretPlugin, TurretSet};
 use ufo::{Ufo, UfoPlugin};
-use ui::{FinishedScreenPlugin, HudPlugin, StartScreenPlugin};
-use utils::cleanup;
+use ui::{FinishedScreenPlugin, StartScreenPlugin};
+use utils::cleanup_component;
 
 const PHYSICS_LENGTH_UNIT: f32 = 100.0;
 
@@ -38,7 +38,7 @@ macro_rules! cleanup_types {
     ( $( $type:ty ),* ) => {
         (
             $(
-                cleanup::<$type>,
+                cleanup_component::<$type>,
             )*
         )
     };
@@ -79,7 +79,6 @@ fn main() {
             ShatterPlugin,
             StartScreenPlugin,
             FinishedScreenPlugin,
-            HudPlugin,
             UfoPlugin,
         ))
         .add_systems(Startup, setup_camera)
